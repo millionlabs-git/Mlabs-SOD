@@ -14,9 +14,11 @@ async def finalize(
     repo_path: str,
     config: Config,
     reporter: StatusReporter,
+    branch_name: str | None = None,
 ) -> None:
     """Generate PR description, push branch, create GitHub PR."""
-    branch_name = f"auto-build/{config.job_id[:8]}"
+    if not branch_name:
+        branch_name = f"auto-build/{config.job_id[:8]}"
 
     # Generate PR description with the agent
     print("[finalizer] Generating PR description...")

@@ -10,7 +10,22 @@ from src.prompts.system import load_rules, load_skill
 from src.prompts.implementation import build_task_prompt, retry_prompt
 from src.pipeline.agent import run_agent
 from src.pipeline.models import BuildPlan, Task
-from src.repo import git_commit
+from src.repo import git_commit, git_push
+
+
+def _get_completed_task_names(repo_path: str) -> set[str]:
+    """Get the set of task names that have already been committed (for resume)."""
+    result = subprocess.run(
+        ["git", "log", "--format=%s"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+    completed = set()
+    for line in result.stdout.strip().splitlines():
+        if line.startswith("feat: "):
+            completed.add(line.removeprefix("feat: "))
+    return completed
 
 
 async def build_tasks(
@@ -18,9 +33,21 @@ async def build_tasks(
     repo_path: str,
     config: Config,
     reporter: StatusReporter,
+    branch_name: str | None = None,
 ) -> None:
     """Execute each task sequentially with retries and visual verification."""
+    completed_tasks = _get_completed_task_names(repo_path)
+
     for i, task in enumerate(plan.tasks):
+        # Skip tasks that were already committed in a previous run
+        if task.name in completed_tasks:
+            print(f"[builder] Skipping task {i + 1}/{plan.total_tasks} (already committed): {task.name}")
+            await reporter.report("task_completed", {
+                "task_number": i + 1,
+                "skipped": True,
+            })
+            continue
+
         await reporter.report("task_started", {
             "task_number": i + 1,
             "total_tasks": plan.total_tasks,
@@ -31,6 +58,8 @@ async def build_tasks(
 
         if success:
             git_commit(repo_path, f"feat: {task.name}")
+            if branch_name:
+                git_push(repo_path, branch_name)
             await reporter.report("task_completed", {"task_number": i + 1})
         else:
             await reporter.report("task_failed", {

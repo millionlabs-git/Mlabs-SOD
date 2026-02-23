@@ -7,6 +7,7 @@ from src.prompts.system import load_agent
 from src.prompts.planning import architecture_prompt, task_decomposition_prompt
 from src.pipeline.agent import run_agent
 from src.pipeline.models import BuildPlan, parse_build_plan
+from src.repo import git_commit, git_push
 
 
 async def plan_build(
@@ -14,6 +15,7 @@ async def plan_build(
     repo_path: str,
     config: Config,
     reporter: StatusReporter,
+    branch_name: str | None = None,
 ) -> BuildPlan:
     """Turn a PRD into an architecture doc and ordered task list.
 
@@ -56,4 +58,11 @@ async def plan_build(
     })
 
     print(f"[planner] Plan: {plan.total_tasks} tasks ({plan.ui_task_count} with UI)")
+
+    # Commit and push planning artifacts for resumability
+    if branch_name:
+        git_commit(repo_path, "docs: add architecture and build plan")
+        git_push(repo_path, branch_name)
+        print("[planner] Pushed planning artifacts")
+
     return plan

@@ -63,9 +63,15 @@ statusRouter.post('/jobs/:id/events', async (req: Request, res: Response) => {
 
   await addJobEvent(job.id, event, detail);
 
+  // Update updated_at on every event so stale detection uses latest activity
+  await updateJobStatus(job.id, job.status);
+
   // Terminal events update the job status
-  if (event === 'completed' || event === 'failed') {
-    await updateJobStatus(job.id, event);
+  if (event === 'failed' || event === 'build_failed') {
+    await updateJobStatus(job.id, 'failed');
+  }
+  if (event === 'completed' || event === 'build_complete') {
+    await updateJobStatus(job.id, 'completed');
   }
 
   // Forward to callback URL if configured (fire-and-forget)

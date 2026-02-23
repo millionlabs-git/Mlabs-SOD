@@ -40,6 +40,23 @@ def clone_repo(repo_url: str, branch: str, dest: str) -> str:
     return repo_path
 
 
+def branch_exists_remote(repo_path: str, branch_name: str) -> bool:
+    """Check if a branch already exists on the remote."""
+    result = subprocess.run(
+        ["git", "ls-remote", "--heads", "origin", branch_name],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+    return bool(result.stdout.strip())
+
+
+def checkout_existing_branch(repo_path: str, branch_name: str) -> None:
+    """Fetch and checkout an existing remote branch."""
+    run(["git", "fetch", "origin", branch_name], cwd=repo_path)
+    run(["git", "checkout", "-b", branch_name, f"origin/{branch_name}"], cwd=repo_path)
+
+
 def create_branch(repo_path: str, branch_name: str) -> None:
     """Create and checkout a new branch."""
     run(["git", "checkout", "-b", branch_name], cwd=repo_path)

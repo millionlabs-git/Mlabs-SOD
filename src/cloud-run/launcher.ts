@@ -44,8 +44,11 @@ export async function launchWorker(job: Job): Promise<LaunchResult> {
     },
   });
 
-  const [execution] = await operation.promise();
-  const executionId = execution.name || `unknown-${Date.now()}`;
+  // Don't await operation.promise() — it blocks until the Cloud Run job
+  // finishes, which can take 30-60+ minutes and causes gRPC timeouts.
+  // The worker reports progress via event callbacks; the orchestrator
+  // detects completion/failure from terminal events + stale job recovery.
+  const executionId = operation.metadata?.name || `unknown-${Date.now()}`;
 
   console.log(`Launched worker for job ${job.id}, execution: ${executionId}`);
   return { executionId };

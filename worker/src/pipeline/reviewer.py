@@ -8,12 +8,14 @@ from src.status import StatusReporter
 from src.prompts.system import load_agent, load_skill
 from src.prompts.review import code_review_prompt, security_review_prompt, visual_e2e_prompt
 from src.pipeline.agent import run_agent
+from src.repo import git_commit, git_push
 
 
 async def review_build(
     repo_path: str,
     config: Config,
     reporter: StatusReporter,
+    branch_name: str | None = None,
 ) -> None:
     """Run code review, security review, and full visual E2E sweep."""
     await reporter.report("review_started")
@@ -42,6 +44,12 @@ async def review_build(
 
     # Visual E2E sweep
     await _visual_e2e_sweep(repo_path, config, reporter)
+
+    # Commit and push review artifacts for resumability
+    if branch_name:
+        git_commit(repo_path, "docs: add review results")
+        git_push(repo_path, branch_name)
+        print("[reviewer] Pushed review artifacts")
 
 
 async def _visual_e2e_sweep(
