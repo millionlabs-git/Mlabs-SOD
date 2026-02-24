@@ -336,12 +336,20 @@ def _build_orchestrator_prompt(
             )
 
     deploy_instructions = ""
-    if config.fly_api_token and not skip.get("deployment"):
-        deploy_instructions = (
-            "\n## Phase 6: Deploy\n"
-            "After finalizing, deploy the project. This is handled by "
-            "existing deployment code — just ensure the build is production-ready.\n"
-        )
+    if not skip.get("deployment"):
+        if config.deploy_target == "replit":
+            deploy_instructions = (
+                "\n## Phase 6: Deploy (Replit)\n"
+                "After finalizing, the project will be prepared for Replit deployment. "
+                "Ensure the build passes, .replit and replit.nix configs are in place, "
+                "and all environment variables are documented in .env.example.\n"
+            )
+        elif config.fly_api_token:
+            deploy_instructions = (
+                "\n## Phase 6: Deploy (Fly.io)\n"
+                "After finalizing, deploy the project to Fly.io. This is handled by "
+                "existing deployment code — just ensure the build is production-ready.\n"
+            )
 
     db_note = ""
     if has_db:
@@ -523,7 +531,13 @@ async def run_pipeline(
     # easier to manage from Python.
     deploy_result: dict | None = None
 
-    if config.fly_api_token and not skip.get("deployment"):
+    # Deploy if: Replit target (always), or Fly.io target with token
+    should_deploy = (
+        not skip.get("deployment")
+        and (config.deploy_target == "replit" or config.fly_api_token)
+    )
+
+    if should_deploy:
         progress.start_phase("deployment")
         try:
             from src.pipeline.deployer import deploy

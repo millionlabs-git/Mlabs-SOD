@@ -1,7 +1,8 @@
-"""Phase 6: Deploy to Neon DB + Fly.io."""
+"""Phase 6: Deploy to target platform (Fly.io or Replit-ready)."""
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -141,15 +142,185 @@ async def _ensure_build_ready(
     return False
 
 
-async def deploy(
+def _detect_required_env_vars(repo_path: str) -> list[dict[str, str]]:
+    """Scan source files for process.env references to build a secrets list."""
+    repo = Path(repo_path)
+    env_vars: dict[str, str] = {}
+
+    # Parse .env.example if it exists
+    env_example = repo / ".env.example"
+    if env_example.exists():
+        for line in env_example.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key = line.split("=", 1)[0].strip()
+                env_vars[key] = "from .env.example"
+
+    # Scan source files for process.env references
+    for ext in ["*.ts", "*.tsx", "*.js", "*.jsx"]:
+        for f in repo.rglob(ext):
+            if "node_modules" in str(f) or "dist" in str(f):
+                continue
+            try:
+                content = f.read_text()
+            except Exception:
+                continue
+            for match in re.findall(r'process\.env\.(\w+)', content):
+                if match not in env_vars:
+                    env_vars[match] = f"referenced in {f.relative_to(repo)}"
+
+    return [{"name": k, "source": v} for k, v in sorted(env_vars.items())]
+
+
+def _ensure_replit_configs(repo_path: str) -> list[str]:
+    """Verify Replit config files exist, return list of missing files."""
+    repo = Path(repo_path)
+    missing = []
+    if not (repo / ".replit").exists():
+        missing.append(".replit")
+    if not (repo / "replit.nix").exists():
+        missing.append("replit.nix")
+    return missing
+
+
+async def _deploy_replit(
     repo_path: str,
     config: Config,
     reporter: StatusReporter,
     branch_name: str | None = None,
 ) -> dict:
-    """Provision DB (if needed), build, deploy to Fly.io, and verify."""
-    await reporter.report("deploy_started")
-    print("[deployer] Starting deployment phase")
+    """Prepare the repo for Replit deployment (no automated deploy — manual import)."""
+    await reporter.report("deploy_started", {"target": "replit"})
+    print("[deployer] Target: Replit — preparing repo for import")
+
+    has_db = _needs_db(repo_path)
+
+    # --- Step 1: Verify Replit configs exist ---
+    missing = _ensure_replit_configs(repo_path)
+    if missing:
+        print(f"[deployer] Missing Replit configs: {missing} — generating...")
+        await reporter.report("replit_configs_missing", {"files": missing})
+
+        await run_agent(
+            prompt=(
+                f"The following Replit config files are missing: {missing}\n\n"
+                "Generate them for this project. Read package.json to understand "
+                "the build/start commands.\n\n"
+                ".replit should define:\n"
+                "- run = the dev command\n"
+                "- [deployment] run and build commands\n"
+                "- [[ports]] localPort matching the app's PORT\n\n"
+                "replit.nix should include nodejs-20_x"
+                + (" and postgresql" if has_db else "")
+            ),
+            allowed_tools=["Read", "Write", "Bash", "Grep", "Glob"],
+            cwd=repo_path,
+            model=config.model,
+            max_turns=10,
+        )
+
+    # --- Step 2: Build readiness check ---
+    build_ok = await _ensure_build_ready(repo_path, None, config, reporter)
+    if not build_ok:
+        raise RuntimeError("Production build failed — repo not ready for Replit import")
+
+    # --- Step 3: Detect required env vars ---
+    env_vars = _detect_required_env_vars(repo_path)
+    print(f"[deployer] Detected {len(env_vars)} environment variables")
+
+    # --- Step 4: Write REPLIT_DEPLOY.md guide ---
+    env_table = ""
+    if env_vars:
+        env_table = "| Variable | Source | Value |\n|----------|--------|-------|\n"
+        for var in env_vars:
+            name = var["name"]
+            source = var["source"]
+            if name == "DATABASE_URL":
+                value = "Replit provides this automatically when you add a PostgreSQL database"
+            elif name in ("SESSION_SECRET", "JWT_SECRET", "NEXTAUTH_SECRET"):
+                value = "Generate: `openssl rand -hex 32`"
+            elif name == "NODE_ENV":
+                value = "`production`"
+            elif name == "PORT":
+                value = "`3000` (Replit maps this automatically)"
+            else:
+                value = "Set in Replit Secrets tab"
+            env_table += f"| `{name}` | {source} | {value} |\n"
+
+    deploy_guide = f"""\
+# Replit Deployment Guide
+
+## Import to Replit
+
+1. Go to [replit.com](https://replit.com) and click **Create Repl**
+2. Select **Import from GitHub**
+3. Paste the repository URL
+4. Replit will auto-detect the `.replit` configuration
+
+## Configure Secrets
+
+Go to **Tools > Secrets** in your Repl and add these environment variables:
+
+{env_table}
+
+{"### Database Setup" if has_db else ""}
+{"" if not has_db else '''
+1. In your Repl, go to **Tools > Database**
+2. Create a PostgreSQL database
+3. Replit will automatically set `DATABASE_URL` in the environment
+4. Run the migration: `npm run db:push`
+'''}
+
+## Deploy
+
+1. Click the **Deploy** button in the top right
+2. Select **Autoscale** or **Reserved VM**
+3. Replit will run the build command from `.replit` `[deployment]` section
+4. Your app will be live at `https://<your-repl-name>.replit.app`
+
+## Development vs Production
+
+| Setting | Development (Fly.io) | Production (Replit) |
+|---------|---------------------|---------------------|
+| Database | Neon PostgreSQL | Replit PostgreSQL |
+| Secrets | `flyctl secrets set` | Replit Secrets tab |
+| Deploy | `flyctl deploy` | Replit Deploy button |
+| URL | `*.fly.dev` | `*.replit.app` |
+| Build | Docker container | `.replit` [deployment] |
+"""
+    deploy_guide_path = Path(repo_path) / "docs" / "REPLIT_DEPLOY.md"
+    deploy_guide_path.parent.mkdir(parents=True, exist_ok=True)
+    deploy_guide_path.write_text(deploy_guide)
+    print("[deployer] Wrote docs/REPLIT_DEPLOY.md")
+
+    # --- Step 5: Commit and report ---
+    git_commit(repo_path, "docs: add Replit deployment guide")
+    if branch_name:
+        git_push(repo_path, branch_name)
+
+    result = {
+        "deploy_target": "replit",
+        "replit_ready": True,
+        "env_vars_required": [v["name"] for v in env_vars],
+        "has_db": has_db,
+    }
+
+    await reporter.report("deployed", result)
+    print(f"[deployer] Replit deployment prep complete: {result}")
+    return result
+
+
+async def _deploy_flyio(
+    repo_path: str,
+    config: Config,
+    reporter: StatusReporter,
+    branch_name: str | None = None,
+) -> dict:
+    """Full Fly.io deployment: provision DB, build, deploy, verify."""
+    await reporter.report("deploy_started", {"target": "flyio"})
+    print("[deployer] Target: Fly.io — starting full deployment")
 
     has_db = _needs_db(repo_path) and config.neon_api_key
     db_url: str | None = None
@@ -279,6 +450,7 @@ async def deploy(
         git_push(repo_path, branch_name)
 
     result = {
+        "deploy_target": "flyio",
         "live_url": live_url,
         "fly_app_name": fly_app_name,
         "neon_project_id": neon_project_id,
@@ -288,3 +460,16 @@ async def deploy(
     print(f"[deployer] Deployment complete: {result}")
 
     return result
+
+
+async def deploy(
+    repo_path: str,
+    config: Config,
+    reporter: StatusReporter,
+    branch_name: str | None = None,
+) -> dict:
+    """Route deployment to the correct target platform."""
+    if config.deploy_target == "replit":
+        return await _deploy_replit(repo_path, config, reporter, branch_name)
+    else:
+        return await _deploy_flyio(repo_path, config, reporter, branch_name)

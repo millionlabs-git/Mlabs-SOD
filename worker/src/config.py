@@ -30,6 +30,9 @@ class Config(BaseModel):
     neon_api_key: str = ""
     fly_api_token: str = ""
 
+    # Deploy target: "flyio" for dev/iteration, "replit" for production
+    deploy_target: str = "flyio"  # flyio | replit
+
     # Model
     model: str = "claude-sonnet-4-6"
 
@@ -69,6 +72,7 @@ class Config(BaseModel):
             github_app_private_key=private_key,
             neon_api_key=os.environ.get("NEON_API_KEY", ""),
             fly_api_token=os.environ.get("FLY_API_TOKEN", ""),
+            deploy_target=os.environ.get("DEPLOY_TARGET", "flyio"),
             model=os.environ.get("MODEL", "claude-sonnet-4-6"),
             max_task_retries=int(os.environ.get("MAX_TASK_RETRIES", "3")),
             task_timeout=int(os.environ.get("TASK_TIMEOUT", "300")),
