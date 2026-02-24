@@ -202,8 +202,8 @@ async def main() -> None:
         else:
             print("[main] Skipping finalize (deploy-only mode)")
 
-        # 11. Deploy (Neon DB + Netlify)
-        if config.netlify_auth_token and not skip.get("deployment"):
+        # 11. Deploy (Neon DB + Fly.io)
+        if config.fly_api_token and not skip.get("deployment"):
             from src.pipeline.deployer import deploy
             deploy_result = await deploy(repo_path, config, reporter, branch_name)
             print(f"[main] Deploy result: {deploy_result}")

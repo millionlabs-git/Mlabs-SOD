@@ -58,9 +58,6 @@ Build the project for production deployment:{env_hint}
 3. If the build fails, diagnose and fix the errors, then retry
 4. Verify the build output directory exists (typically `dist/`, `build/`, `.next/`, or `out/`)
 5. Report the build output directory path
-
-For Next.js static export projects, check if `next.config.*` has `output: 'export'`. \
-If not, and the project is a simple SPA/static site, add it so Netlify can serve it.
 """
 
 
@@ -91,60 +88,119 @@ Be thorough — this is attempt {attempt} of {max_retries}. Fix everything you c
 """
 
 
-def netlify_deploy_prompt(job_id: str, env_vars_hint: str) -> str:
-    site_name = f"sod-{job_id[:8]}"
-    return f"""\
-Deploy this project to Netlify using the Netlify CLI.
+def flyio_deploy_prompt(job_id: str, db_url: str | None) -> str:
+    app_name = f"sod-{job_id[:8]}"
 
-## Step 1: Detect the build output directory
-
-Check which directory contains the production build output:
-- Next.js static export: `out/`
-- Next.js SSR: `.next/`
-- Vite/React: `dist/`
-- Create React App: `build/`
-- Read package.json and framework config to confirm
-
-## Step 2: Create site and deploy using the Netlify CLI
-
-Run these commands:
-
+    db_secret_hint = ""
+    if db_url:
+        db_secret_hint = f"""
+IMPORTANT: Set the database URL as a secret:
 ```bash
-# Create a new site
-npx netlify-cli sites:create --name "{site_name}" --account-slug "" --json || true
+flyctl secrets set DATABASE_URL="{db_url}" -a {app_name}
+```
+"""
 
-# Deploy the build output (replace BUILD_DIR with actual directory)
-npx netlify-cli deploy --prod --dir=BUILD_DIR --site "{site_name}" --json
+    return f"""\
+Deploy this full-stack project to Fly.io as a single container.
+
+## Step 1: Analyse the project structure
+
+Understand the project layout:
+- Identify the backend framework (Express, Fastify, etc.) and its entry point
+- Identify the frontend framework (Vite, Next.js, CRA, etc.) and its build output dir
+- Check package.json scripts for build and start commands
+- Check for existing Dockerfile — if one exists and is reasonable, use it
+
+## Step 2: Generate a Dockerfile (if one doesn't exist)
+
+Create a multi-stage Dockerfile:
+
+```dockerfile
+# Stage 1: Install dependencies and build
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage 2: Production image
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/<build-output> ./<build-output>
+COPY --from=builder /app/<server-files> ./<server-files>
+EXPOSE 3000
+CMD ["node", "<server-entry-point>"]
 ```
 
-If the site name is taken, try `{site_name}-app` or `{site_name}-live`.
+Adapt this template based on the project structure:
+- For monorepos with `frontend/` and `backend/` dirs, copy both
+- Ensure the Express/backend server serves the frontend static files (e.g. `express.static('frontend/dist')`)
+- If the server doesn't already serve static files, add that code
+- Detect the correct build output dir: `dist/`, `build/`, `.next/`, `out/`
+- Detect the correct port from server code (default 3000)
 
-The `--json` flag returns structured output. Parse it to get the site URL and ID.
+## Step 3: Generate fly.toml
 
-## Step 3: Detect and set environment variables
+Create `fly.toml`:
+```toml
+app = "{app_name}"
+primary_region = "lhr"
 
-After deploying, set env vars on the site:{env_vars_hint}
+[build]
 
-Also detect required env vars:
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+```
+
+Adjust `internal_port` if the app uses a different port.
+
+## Step 4: Deploy to Fly.io
+
+```bash
+# Create the app (ignore error if already exists)
+flyctl apps create {app_name} --org personal || true
+
+# Deploy
+flyctl deploy -a {app_name}
+```
+
+If the app name is taken, try `{app_name}-app` or `{app_name}-live` and update fly.toml accordingly.
+
+## Step 5: Set environment variables / secrets
+{db_secret_hint}
+Detect and set other required env vars:
 - Read `.env.example` or similar template files
 - Scan for `process.env.*` or `import.meta.env.*` references
-- **Auto-generate** secrets: `NEXTAUTH_SECRET`, `JWT_SECRET`, `SESSION_SECRET` → `openssl rand -hex 32`
-- **Derive from site URL**: `NEXTAUTH_URL`, `APP_URL`, `BASE_URL` → use the deployed URL
+- **Auto-generate** secrets: `JWT_SECRET`, `SESSION_SECRET`, `NEXTAUTH_SECRET` → `openssl rand -hex 32`
+- **Derive from app URL**: `APP_URL`, `BASE_URL`, `NEXTAUTH_URL` → `https://{app_name}.fly.dev`
 - **Flag as missing**: third-party keys (STRIPE_*, OAuth, external APIs)
 
-Set env vars via CLI:
+Set secrets via CLI:
 ```bash
-npx netlify-cli env:set VAR_NAME "value" --site "{site_name}"
+flyctl secrets set VAR_NAME="value" -a {app_name}
 ```
 
-## Step 4: Save deployment info
+Set non-secret env vars in fly.toml under `[env]` section and redeploy if needed.
 
-Write to /tmp/netlify-deployment.json:
+## Step 6: Save deployment info
+
+Write to /tmp/fly-deployment.json:
 ```json
 {{
-  "site_id": "<from deploy output>",
-  "site_url": "<from deploy output>",
-  "deploy_id": "<from deploy output>",
+  "app_name": "{app_name}",
+  "app_url": "https://{app_name}.fly.dev",
   "env_vars_set": ["list of vars set"],
   "env_vars_missing": ["list of vars that need manual setup"]
 }}
@@ -175,7 +231,7 @@ Verify the live deployment at {site_url} is working correctly:
    node {vp_script} goto "{site_url}" --screenshot {screenshots_dir}/deploy-home.png
 
 2. Check the following:
-   - Home page renders correctly (not a blank page, error, or default Netlify page)
+   - Home page renders correctly (not a blank page, error, or default placeholder page)
    - Navigation links work
    - Key pages from the PRD are accessible{db_check}
 

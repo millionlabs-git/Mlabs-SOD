@@ -27,7 +27,7 @@ statusRouter.get('/jobs/:id/status', async (req: Request, res: Response) => {
     cloud_run_execution_id: job.cloud_run_execution_id,
     pr_url: job.pr_url,
     live_url: job.live_url,
-    netlify_site_id: job.netlify_site_id,
+    fly_app_name: job.fly_app_name,
     neon_project_id: job.neon_project_id,
     created_at: job.created_at,
     updated_at: job.updated_at,
@@ -78,8 +78,8 @@ statusRouter.post('/jobs/:id/events', async (req: Request, res: Response) => {
   }
   if (event === 'deployed' && detail?.live_url) {
     await pool.query(
-      'UPDATE jobs SET live_url = $1, netlify_site_id = $2, neon_project_id = $3 WHERE id = $4',
-      [detail.live_url, detail.netlify_site_id || null, detail.neon_project_id || null, job.id]
+      'UPDATE jobs SET live_url = $1, fly_app_name = $2, neon_project_id = $3 WHERE id = $4',
+      [detail.live_url, detail.fly_app_name || null, detail.neon_project_id || null, job.id]
     );
   }
 

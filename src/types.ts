@@ -12,7 +12,7 @@ export interface Job {
   cloud_run_execution_id: string | null;
   pr_url: string | null;
   live_url: string | null;
-  netlify_site_id: string | null;
+  fly_app_name: string | null;
   neon_project_id: string | null;
   created_at: Date;
   updated_at: Date;

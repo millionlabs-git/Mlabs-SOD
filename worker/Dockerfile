@@ -18,6 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Claude Code CLI (required by claude-agent-sdk)
 RUN npm install -g @anthropic-ai/claude-code
 
+# Install Fly.io CLI (flyctl) for deployment
+ENV FLYCTL_INSTALL="/usr/local/fly"
+RUN curl -L https://fly.io/install.sh | sh
+ENV PATH="/usr/local/fly/bin:$PATH"
+
 # Install Playwright + Chromium for Visual Playwright
 RUN npx playwright install --with-deps chromium
 

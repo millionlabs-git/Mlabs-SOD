@@ -1,4 +1,4 @@
-"""Phase 6: Deploy to Neon DB + Netlify."""
+"""Phase 6: Deploy to Neon DB + Fly.io."""
 from __future__ import annotations
 
 import json
@@ -13,7 +13,7 @@ from src.prompts.deploy import (
     schema_migration_prompt,
     production_build_prompt,
     build_fix_prompt,
-    netlify_deploy_prompt,
+    flyio_deploy_prompt,
     deployment_verify_prompt,
 )
 from src.pipeline.agent import run_agent
@@ -48,16 +48,6 @@ def _neon_mcp(config: Config) -> dict:
             "command": "npx",
             "args": ["-y", "@neondatabase/mcp-server-neon", "start"],
             "env": {"NEON_API_KEY": config.neon_api_key},
-        }
-    }
-
-
-def _netlify_mcp(config: Config) -> dict:
-    return {
-        "netlify": {
-            "command": "npx",
-            "args": ["-y", "@netlify/mcp"],
-            "env": {"NETLIFY_AUTH_TOKEN": config.netlify_auth_token},
         }
     }
 
@@ -157,7 +147,7 @@ async def deploy(
     reporter: StatusReporter,
     branch_name: str | None = None,
 ) -> dict:
-    """Provision DB (if needed), build, deploy to Netlify, and verify."""
+    """Provision DB (if needed), build, deploy to Fly.io, and verify."""
     await reporter.report("deploy_started")
     print("[deployer] Starting deployment phase")
 
@@ -214,62 +204,50 @@ async def deploy(
     if not build_ok:
         raise RuntimeError("Production build failed after all retries — cannot deploy")
 
-    # --- Step 4: Deploy to Netlify ---
-    print("[deployer] Deploying to Netlify...")
-    await reporter.report("netlify_deploying")
+    # --- Step 4: Deploy to Fly.io ---
+    print("[deployer] Deploying to Fly.io...")
+    await reporter.report("flyio_deploying")
 
-    # Export NETLIFY_AUTH_TOKEN so the CLI can authenticate
+    # Export FLY_API_TOKEN so flyctl can authenticate
     import os
-    os.environ["NETLIFY_AUTH_TOKEN"] = config.netlify_auth_token
-
-    env_vars_hint = ""
-    if db_url:
-        env_vars_hint = f'\n   - DATABASE_URL="{db_url}"'
+    os.environ["FLY_API_TOKEN"] = config.fly_api_token
 
     await run_agent(
-        prompt=netlify_deploy_prompt(config.job_id, env_vars_hint),
+        prompt=flyio_deploy_prompt(config.job_id, db_url),
         allowed_tools=["Bash", "Read", "Write", "Edit", "Grep", "Glob"],
         cwd=repo_path,
         model=config.model,
-        max_turns=20,
+        max_turns=25,
     )
 
     # Read deployment info saved by agent
-    deploy_file = Path("/tmp/netlify-deployment.json")
+    deploy_file = Path("/tmp/fly-deployment.json")
     live_url: str | None = None
-    netlify_site_id: str | None = None
+    fly_app_name: str | None = None
 
     if deploy_file.exists():
         deploy_info = json.loads(deploy_file.read_text())
-        live_url = deploy_info.get("site_url")
-        netlify_site_id = deploy_info.get("site_id")
+        live_url = deploy_info.get("app_url")
+        fly_app_name = deploy_info.get("app_name")
         print(f"[deployer] Deployed to: {live_url}")
     else:
-        print("[deployer] Warning: Netlify deployment info file not found, trying CLI lookup...")
-        # Fallback: query Netlify CLI for the site we created
-        site_name = f"sod-{config.job_id[:8]}"
-        try:
-            import subprocess as sp
-            result = sp.run(
-                ["npx", "netlify-cli", "api", "listSites", "--json"],
-                capture_output=True, text=True, cwd=repo_path, timeout=30,
-            )
-            if result.returncode == 0:
-                import re
-                # Search for our site URL in any netlify output
-                for variant in [site_name, f"{site_name}-app", f"{site_name}-live"]:
-                    url = f"https://{variant}.netlify.app"
-                    # Quick check if site responds
-                    check = sp.run(
-                        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url],
-                        capture_output=True, text=True, timeout=10,
-                    )
-                    if check.stdout.strip() not in ("000", "404"):
-                        live_url = url
-                        print(f"[deployer] Found site via fallback: {live_url}")
-                        break
-        except Exception as e:
-            print(f"[deployer] Fallback lookup failed: {e}")
+        print("[deployer] Warning: Fly.io deployment info file not found, trying fallback...")
+        # Fallback: check if the expected app URL responds
+        app_name = f"sod-{config.job_id[:8]}"
+        for variant in [app_name, f"{app_name}-app", f"{app_name}-live"]:
+            url = f"https://{variant}.fly.dev"
+            try:
+                check = subprocess.run(
+                    ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if check.stdout.strip() not in ("000", "404"):
+                    live_url = url
+                    fly_app_name = variant
+                    print(f"[deployer] Found site via fallback: {live_url}")
+                    break
+            except Exception as e:
+                print(f"[deployer] Fallback check for {variant} failed: {e}")
 
     # --- Step 5: Verify live site ---
     if live_url:
@@ -302,7 +280,7 @@ async def deploy(
 
     result = {
         "live_url": live_url,
-        "netlify_site_id": netlify_site_id,
+        "fly_app_name": fly_app_name,
         "neon_project_id": neon_project_id,
     }
 

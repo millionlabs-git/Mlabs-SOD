@@ -40,7 +40,7 @@ export async function launchWorker(job: Job): Promise<LaunchResult> {
             { name: 'ORCHESTRATOR_URL', value: config.orchestratorUrl },
             { name: 'WEBHOOK_SECRET', value: config.webhookSecret },
             { name: 'NEON_API_KEY', value: config.neonApiKey },
-            { name: 'NETLIFY_AUTH_TOKEN', value: config.netlifyAuthToken },
+            { name: 'FLY_API_TOKEN', value: config.flyApiToken },
           ],
         },
       ],
