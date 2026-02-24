@@ -3,11 +3,18 @@ import { z } from 'zod';
 import { config } from '../config';
 import { getJob, getJobEvents, addJobEvent, updateJobStatus } from '../db/queries';
 import { pool } from '../db/client';
+import { forwardEventToMillionScopes } from '../webhook/notifier';
 
 export const statusRouter = Router();
 
-// GET /jobs/:id/status — public job status
+// GET /jobs/:id/status — job status polling (used by MillionScopes)
 statusRouter.get('/jobs/:id/status', async (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || authHeader !== `Bearer ${config.webhookSecret}`) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
   const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const job = await getJob(id);
   if (!job) {
@@ -15,27 +22,10 @@ statusRouter.get('/jobs/:id/status', async (req: Request, res: Response) => {
     return;
   }
 
-  const events = await getJobEvents(job.id);
-
   res.json({
-    id: job.id,
-    status: job.status,
-    repo_url: job.repo_url,
-    branch: job.branch,
-    prd_path: job.prd_path,
-    mode: job.mode,
-    cloud_run_execution_id: job.cloud_run_execution_id,
-    pr_url: job.pr_url,
-    live_url: job.live_url,
-    fly_app_name: job.fly_app_name,
-    neon_project_id: job.neon_project_id,
-    created_at: job.created_at,
-    updated_at: job.updated_at,
-    events: events.map((e) => ({
-      event: e.event,
-      detail: e.detail,
-      created_at: e.created_at,
-    })),
+    job_id: job.id,
+    status: job.build_status || 'queued',
+    message: job.build_message || '',
   });
 });
 
@@ -90,6 +80,11 @@ statusRouter.post('/jobs/:id/events', async (req: Request, res: Response) => {
   if (event === 'completed' || event === 'build_complete') {
     await updateJobStatus(job.id, 'completed');
   }
+
+  // Forward build progress to MillionScopes (fire-and-forget)
+  forwardEventToMillionScopes(job.id, event, detail).catch(() => {
+    // Intentionally swallowed — fire-and-forget
+  });
 
   // Forward to callback URL if configured (fire-and-forget)
   if (job.callback_url) {
