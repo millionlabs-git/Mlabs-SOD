@@ -1,6 +1,8 @@
 """Thin wrapper around the Claude Agent SDK for running agent queries."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     AssistantMessage,
@@ -9,6 +11,16 @@ from claude_agent_sdk import (
     ToolUseBlock,
     query,
 )
+
+
+@dataclass
+class AgentResult:
+    """Structured result returned by run_agent."""
+
+    cost_usd: float
+    turns: int
+    duration_ms: int
+    is_error: bool
 
 
 async def run_agent(
@@ -20,12 +32,16 @@ async def run_agent(
     cwd: str = ".",
     model: str = "claude-sonnet-4-6",
     max_turns: int | None = None,
-) -> ResultMessage:
+    context: str = "",
+) -> AgentResult:
     """Run a Claude agent query and return the final result.
 
     Streams messages to stdout for logging. Returns the ResultMessage
     with cost and usage info.
     """
+    if context:
+        prompt = f"## Project Context\n\n{context}\n\n---\n\n{prompt}"
+
     if allowed_tools is None:
         allowed_tools = ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
 
@@ -68,4 +84,9 @@ async def run_agent(
     if result.is_error:
         raise RuntimeError(f"Agent query failed: {result}")
 
-    return result
+    return AgentResult(
+        cost_usd=result.total_cost_usd or 0.0,
+        turns=result.num_turns or 0,
+        duration_ms=result.duration_ms or 0,
+        is_error=result.is_error,
+    )

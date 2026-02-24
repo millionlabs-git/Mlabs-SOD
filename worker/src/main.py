@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import subprocess
 import sys
 from pathlib import Path
 
@@ -19,67 +18,8 @@ from src.repo import (
 from src.github_auth import get_installation_token
 from src.prd_parser import parse_prd
 from src.prompts.system import set_config_path, set_vp_skill_path
-from src.pipeline.planner import plan_build
-from src.pipeline.scaffolder import scaffold_project
-from src.pipeline.builder import build_tasks
-from src.pipeline.reviewer import review_build
-from src.pipeline.finalizer import finalize
-from src.pipeline.models import parse_build_plan
-
-
-def _detect_completed_phases(repo_path: str, plan_path: str) -> dict[str, bool]:
-    """Check which pipeline phases have already been completed on this branch."""
-    phases: dict[str, bool] = {
-        "planning": False,
-        "scaffolding": False,
-        "building": False,
-        "review": False,
-        "deployment": False,
-    }
-
-    # Planning is done if BUILD_PLAN.md exists
-    if Path(plan_path).exists():
-        phases["planning"] = True
-
-    # Scaffolding is done if there are source files beyond docs/
-    repo = Path(repo_path)
-    has_source = any(
-        p.is_file()
-        for p in repo.iterdir()
-        if p.name not in (".git", "docs", ".gitignore", "README.md", ".github")
-    ) or (repo / "package.json").exists() or (repo / "pyproject.toml").exists()
-    if has_source and phases["planning"]:
-        phases["scaffolding"] = True
-
-    # Building is done if the committed task count matches the plan
-    if phases["scaffolding"] and Path(plan_path).exists():
-        try:
-            plan = parse_build_plan(plan_path)
-            result = subprocess.run(
-                ["git", "log", "--oneline", "--grep=^feat:"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-            )
-            feat_commits = [
-                line for line in result.stdout.strip().splitlines() if line
-            ]
-            if len(feat_commits) >= plan.total_tasks:
-                phases["building"] = True
-        except Exception:
-            pass
-
-    # Review is done if review docs exist
-    review_files = list((repo / "docs").glob("*REVIEW*")) if (repo / "docs").exists() else []
-    if phases["building"] and review_files:
-        phases["review"] = True
-
-    # Deployment is done if DEPLOYMENT.md exists
-    deploy_info = repo / "docs" / "DEPLOYMENT.md"
-    if phases["review"] and deploy_info.exists():
-        phases["deployment"] = True
-
-    return phases
+from src.orchestrator.runner import run_pipeline
+from src.orchestrator.progress import ProgressTracker
 
 
 async def main() -> None:
@@ -142,8 +82,6 @@ async def main() -> None:
         print(f"[main] PRD loaded ({len(prd_content)} chars)")
 
         # 5. Detect completed phases based on mode
-        plan_path = f"{repo_path}/docs/BUILD_PLAN.md"
-
         if config.mode == "deploy-only":
             print("[main] Mode: deploy-only — skipping all build phases")
             skip = {
@@ -158,7 +96,13 @@ async def main() -> None:
             from src.pipeline.assessor import assess_maturity
             skip = await assess_maturity(repo_path, prd_content, config, reporter)
         elif resuming:
-            skip = _detect_completed_phases(repo_path, plan_path)
+            # Use PROGRESS.json for resumability when available
+            progress = ProgressTracker(repo_path, config.job_id)
+            if progress.progress.phases:  # Has saved progress
+                skip = progress.get_skip_map()
+                print(f"[main] Resuming from PROGRESS.json: {skip}")
+            else:
+                skip = {}
         else:
             skip = {}
 
@@ -167,48 +111,18 @@ async def main() -> None:
             if skipped:
                 print(f"[main] Skipping completed phases: {', '.join(skipped)}")
 
-        # 6. Plan
-        plan = None
-        if skip.get("planning"):
-            print("[main] Skipping planning (already complete)")
-            if Path(plan_path).exists():
-                plan = parse_build_plan(plan_path)
-        else:
-            plan = await plan_build(prd_content, repo_path, config, reporter, branch_name)
+        # 6. Run the pipeline
+        deploy_result = await run_pipeline(
+            prd_content=prd_content,
+            repo_path=repo_path,
+            config=config,
+            reporter=reporter,
+            branch_name=branch_name,
+            skip=skip,
+        )
 
-        # 7. Scaffold
-        if skip.get("scaffolding"):
-            print("[main] Skipping scaffolding (already complete)")
-        else:
-            await scaffold_project(repo_path, config, reporter, branch_name)
-
-        # 8. Build tasks
-        if skip.get("building"):
-            print("[main] Skipping building (all tasks already complete)")
-        elif plan:
-            await build_tasks(plan, repo_path, config, reporter, branch_name)
-        else:
-            print("[main] Warning: no build plan available, skipping build tasks")
-
-        # 9. Review
-        if skip.get("review"):
-            print("[main] Skipping review (already complete)")
-        else:
-            await review_build(repo_path, config, reporter, branch_name)
-
-        # 10. Finalize (push + PR) — skip in deploy-only mode
-        if config.mode != "deploy-only":
-            await finalize(repo_path, config, reporter, branch_name)
-        else:
-            print("[main] Skipping finalize (deploy-only mode)")
-
-        # 11. Deploy (Neon DB + Fly.io)
-        if config.fly_api_token and not skip.get("deployment"):
-            from src.pipeline.deployer import deploy
-            deploy_result = await deploy(repo_path, config, reporter, branch_name)
+        if deploy_result:
             print(f"[main] Deploy result: {deploy_result}")
-        elif skip.get("deployment"):
-            print("[main] Skipping deployment (already complete)")
 
         print("[main] Build completed successfully")
 
