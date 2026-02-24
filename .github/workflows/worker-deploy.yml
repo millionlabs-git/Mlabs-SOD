@@ -1,6 +1,7 @@
 name: Worker Deploy
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -23,19 +24,21 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for GCR
-        run: gcloud auth configure-docker
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev
 
       - name: Build and push worker image
         run: |
-          docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:latest \
-                       -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:${{ github.sha }} \
+          IMAGE=europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/prd-worker/prd-worker
+          docker build -t $IMAGE:latest \
+                       -t $IMAGE:${{ github.sha }} \
                        worker/
-          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:latest
-          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:${{ github.sha }}
+          docker push $IMAGE:latest
+          docker push $IMAGE:${{ github.sha }}
 
       - name: Update Cloud Run job
         run: |
+          IMAGE=europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/prd-worker/prd-worker
           gcloud run jobs update prd-worker \
-            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:latest \
-            --region ${{ secrets.GCP_REGION || 'europe-west1' }}
+            --image $IMAGE:latest \
+            --region europe-west1
