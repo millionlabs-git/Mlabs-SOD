@@ -218,17 +218,20 @@ async def deploy(
     print("[deployer] Deploying to Netlify...")
     await reporter.report("netlify_deploying")
 
+    # Export NETLIFY_AUTH_TOKEN so the CLI can authenticate
+    import os
+    os.environ["NETLIFY_AUTH_TOKEN"] = config.netlify_auth_token
+
     env_vars_hint = ""
     if db_url:
         env_vars_hint = f'\n   - DATABASE_URL="{db_url}"'
 
     await run_agent(
         prompt=netlify_deploy_prompt(config.job_id, env_vars_hint),
-        allowed_tools=["Bash", "Read", "Write", "Grep", "Glob"],
-        mcp_servers=_netlify_mcp(config),
+        allowed_tools=["Bash", "Read", "Write", "Edit", "Grep", "Glob"],
         cwd=repo_path,
         model=config.model,
-        max_turns=15,
+        max_turns=20,
     )
 
     # Read deployment info saved by agent

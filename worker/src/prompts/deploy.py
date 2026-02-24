@@ -92,53 +92,67 @@ Be thorough — this is attempt {attempt} of {max_retries}. Fix everything you c
 
 
 def netlify_deploy_prompt(job_id: str, env_vars_hint: str) -> str:
+    site_name = f"sod-{job_id[:8]}"
     return f"""\
-Deploy this project to Netlify:
+Deploy this project to Netlify using the Netlify CLI.
 
-1. **Detect required environment variables** before deploying:
-   - Read `.env.example`, `.env.local.example`, `.env.sample`, or similar template files
-   - Scan the codebase for `process.env.*` or `import.meta.env.*` references
-   - Check framework config files (next.config.*, nuxt.config.*, etc.)
-   - Cross-reference with any docs/PRD.md requirements
+## Step 1: Detect the build output directory
 
-2. **Resolve each env var** using this priority:
-   - **Known values** (set these exactly):{env_vars_hint}
-   - **Auto-generate** secrets that just need a random value:
-     - `NEXTAUTH_SECRET`, `JWT_SECRET`, `SESSION_SECRET`, `SECRET_KEY`, etc. → generate a 64-char hex string using `openssl rand -hex 32`
-   - **Derive from deployment** — set after you know the site URL:
-     - `NEXTAUTH_URL`, `NEXT_PUBLIC_URL`, `APP_URL`, `BASE_URL` → use the Netlify site URL
-     - `NEXT_PUBLIC_API_URL` → use the Netlify site URL + `/api`
-   - **Skip safely** — vars that are optional or only needed in dev:
-     - `NODE_ENV` (Netlify sets this automatically)
-     - Analytics keys, logging tokens, dev-only flags
-   - **Flag as missing** — vars that need real third-party credentials you can't generate:
-     - Payment keys (STRIPE_*, PAYPAL_*), OAuth credentials (GOOGLE_CLIENT_*, GITHUB_CLIENT_*), external API keys
-     - List these in the deployment info so the user knows to set them manually
+Check which directory contains the production build output:
+- Next.js static export: `out/`
+- Next.js SSR: `.next/`
+- Vite/React: `dist/`
+- Create React App: `build/`
+- Read package.json and framework config to confirm
 
-3. Use the Netlify MCP tool to create a new site named "sod-{job_id[:8]}"
+## Step 2: Create site and deploy using the Netlify CLI
 
-4. Set ALL resolved environment variables on the Netlify site using the MCP tool
+Run these commands:
 
-5. Detect the build output directory:
-   - Next.js: `out/` (static export) or `.next/` (SSR)
-   - Vite/React: `dist/`
-   - Create React App: `build/`
-   - Check package.json scripts and framework config
+```bash
+# Create a new site
+npx netlify-cli sites:create --name "{site_name}" --account-slug "" --json || true
 
-6. Deploy the build output to Netlify
+# Deploy the build output (replace BUILD_DIR with actual directory)
+npx netlify-cli deploy --prod --dir=BUILD_DIR --site "{site_name}" --json
+```
 
-7. Save the deployment info to /tmp/netlify-deployment.json:
-   {{
-     "site_id": "<netlify_site_id>",
-     "site_url": "<deployed_url>",
-     "deploy_id": "<deploy_id>",
-     "env_vars_set": ["DATABASE_URL", "NEXTAUTH_SECRET", ...],
-     "env_vars_missing": ["STRIPE_SECRET_KEY", ...]
-   }}
+If the site name is taken, try `{site_name}-app` or `{site_name}-live`.
 
-8. Print the live URL and any missing env vars that need manual setup.
+The `--json` flag returns structured output. Parse it to get the site URL and ID.
 
-If the deploy fails, check the build output directory and retry.
+## Step 3: Detect and set environment variables
+
+After deploying, set env vars on the site:{env_vars_hint}
+
+Also detect required env vars:
+- Read `.env.example` or similar template files
+- Scan for `process.env.*` or `import.meta.env.*` references
+- **Auto-generate** secrets: `NEXTAUTH_SECRET`, `JWT_SECRET`, `SESSION_SECRET` → `openssl rand -hex 32`
+- **Derive from site URL**: `NEXTAUTH_URL`, `APP_URL`, `BASE_URL` → use the deployed URL
+- **Flag as missing**: third-party keys (STRIPE_*, OAuth, external APIs)
+
+Set env vars via CLI:
+```bash
+npx netlify-cli env:set VAR_NAME "value" --site "{site_name}"
+```
+
+## Step 4: Save deployment info
+
+Write to /tmp/netlify-deployment.json:
+```json
+{{
+  "site_id": "<from deploy output>",
+  "site_url": "<from deploy output>",
+  "deploy_id": "<from deploy output>",
+  "env_vars_set": ["list of vars set"],
+  "env_vars_missing": ["list of vars that need manual setup"]
+}}
+```
+
+IMPORTANT: You MUST write this file. The pipeline reads it to report the live URL.
+
+Print the live URL when done.
 """
 
 
