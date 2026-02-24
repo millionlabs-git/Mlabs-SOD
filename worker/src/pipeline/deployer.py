@@ -23,6 +23,7 @@ from src.repo import git_commit, git_push
 def _needs_db(repo_path: str) -> bool:
     """Detect whether the project has database schema files."""
     repo = Path(repo_path)
+    # Check explicit known paths
     indicators = [
         repo / "prisma" / "schema.prisma",
         repo / "drizzle.config.ts",
@@ -32,7 +33,13 @@ def _needs_db(repo_path: str) -> bool:
         repo / "db" / "migrate",
         repo / "drizzle",
     ]
-    return any(p.exists() for p in indicators)
+    if any(p.exists() for p in indicators):
+        return True
+    # Recursive search for migrations or schema files anywhere in the tree
+    for pattern in ["**/migrations", "**/schema.prisma", "**/drizzle.config.*", "**/schema.sql"]:
+        if list(repo.glob(pattern)):
+            return True
+    return False
 
 
 def _neon_mcp(config: Config) -> dict:
