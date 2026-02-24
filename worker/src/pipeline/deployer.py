@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from src.config import Config
@@ -11,6 +12,7 @@ from src.prompts.deploy import (
     neon_provision_prompt,
     schema_migration_prompt,
     production_build_prompt,
+    build_fix_prompt,
     netlify_deploy_prompt,
     deployment_verify_prompt,
 )
@@ -51,6 +53,95 @@ def _netlify_mcp(config: Config) -> dict:
             "env": {"NETLIFY_AUTH_TOKEN": config.netlify_auth_token},
         }
     }
+
+
+def _try_build(repo_path: str) -> tuple[bool, str]:
+    """Attempt to build the project. Returns (success, error_output)."""
+    # Install dependencies first
+    pkg_json = Path(repo_path) / "package.json"
+    if pkg_json.exists():
+        install = subprocess.run(
+            ["npm", "install"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if install.returncode != 0:
+            return False, f"npm install failed:\n{install.stderr}\n{install.stdout}"
+
+    # Try build
+    build = subprocess.run(
+        ["npm", "run", "build"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if build.returncode != 0:
+        return False, f"Build failed:\n{build.stderr}\n{build.stdout}"
+
+    return True, ""
+
+
+async def _ensure_build_ready(
+    repo_path: str,
+    db_url: str | None,
+    config: Config,
+    reporter: StatusReporter,
+    max_retries: int = 3,
+) -> bool:
+    """Install deps, try building, and fix errors with agent retries.
+
+    Returns True if the build succeeds, False if all retries exhausted.
+    """
+    await reporter.report("readiness_check")
+    print("[deployer] Running deployment readiness check...")
+
+    # Set up env vars before building
+    if db_url:
+        env_file = Path(repo_path) / ".env.local"
+        if not env_file.exists():
+            env_file.write_text(f'DATABASE_URL="{db_url}"\n')
+            print("[deployer] Wrote DATABASE_URL to .env.local")
+
+    for attempt in range(max_retries):
+        print(f"[deployer] Build attempt {attempt + 1}/{max_retries}...")
+        success, errors = _try_build(repo_path)
+
+        if success:
+            print("[deployer] Build succeeded")
+            await reporter.report("readiness_passed", {"attempt": attempt + 1})
+            return True
+
+        # Truncate very long error output for the prompt
+        if len(errors) > 3000:
+            errors = errors[:3000] + "\n... (truncated)"
+
+        print(f"[deployer] Build failed (attempt {attempt + 1}), running fix agent...")
+        await reporter.report("readiness_fixing", {
+            "attempt": attempt + 1,
+            "error_preview": errors[:200],
+        })
+
+        await run_agent(
+            prompt=build_fix_prompt(errors, attempt + 1, max_retries),
+            allowed_tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
+            cwd=repo_path,
+            model=config.model,
+            max_turns=20,
+        )
+
+    # Final attempt after last fix
+    success, errors = _try_build(repo_path)
+    if success:
+        print("[deployer] Build succeeded after fixes")
+        await reporter.report("readiness_passed", {"attempt": max_retries + 1})
+        return True
+
+    print("[deployer] Build failed after all retries")
+    await reporter.report("readiness_failed", {"errors": errors[:500]})
+    return False
 
 
 async def deploy(
@@ -110,17 +201,11 @@ async def deploy(
         else:
             print("[deployer] No database schema detected — skipping DB provisioning")
 
-    # --- Step 3: Production build ---
-    print("[deployer] Running production build...")
-    await reporter.report("production_building")
+    # --- Step 3: Deployment readiness (install + build with retries) ---
+    build_ok = await _ensure_build_ready(repo_path, db_url, config, reporter)
 
-    await run_agent(
-        prompt=production_build_prompt(db_url),
-        allowed_tools=["Bash", "Read", "Write", "Edit", "Grep", "Glob"],
-        cwd=repo_path,
-        model=config.model,
-        max_turns=15,
-    )
+    if not build_ok:
+        raise RuntimeError("Production build failed after all retries — cannot deploy")
 
     # --- Step 4: Deploy to Netlify ---
     print("[deployer] Deploying to Netlify...")

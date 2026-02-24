@@ -64,6 +64,33 @@ If not, and the project is a simple SPA/static site, add it so Netlify can serve
 """
 
 
+def build_fix_prompt(errors: str, attempt: int, max_retries: int) -> str:
+    return f"""\
+The production build failed (attempt {attempt}/{max_retries}). Diagnose and fix the errors.
+
+## Build errors:
+```
+{errors}
+```
+
+## Instructions:
+
+1. Read the error output carefully and identify the root cause
+2. Common issues to check:
+   - Missing dependencies → run `npm install <package>`
+   - TypeScript errors → fix the type issues in the source files
+   - Missing environment variables → add defaults or mock values for build time
+   - Import errors → fix import paths or install missing modules
+   - Next.js config issues → check next.config.js/ts settings
+   - ESLint errors blocking build → fix the lint issues or adjust config
+3. Fix ALL errors you find, not just the first one
+4. Do NOT run `npm run build` yourself — the system will retry automatically after your fixes
+5. If the project needs specific Node.js version or other system deps, note it but try to work around it
+
+Be thorough — this is attempt {attempt} of {max_retries}. Fix everything you can find.
+"""
+
+
 def netlify_deploy_prompt(job_id: str, env_vars_hint: str) -> str:
     return f"""\
 Deploy this project to Netlify:
