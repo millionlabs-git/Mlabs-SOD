@@ -46,7 +46,7 @@ async function processNext(): Promise<void> {
 
 async function recoverStaleJobs(): Promise<void> {
   try {
-    const count = await markStaleJobsFailed(30);
+    const count = await markStaleJobsFailed(60);
     if (count > 0) {
       console.log(`Recovered ${count} stale jobs (marked as failed)`);
     }

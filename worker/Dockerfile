@@ -47,11 +47,21 @@ RUN pip install --no-cache-dir -r requirements.txt
 # App code
 COPY src/ ./src/
 
-# Create workspace directory for repo clones
-RUN mkdir -p /workspace
+# Create non-root user (Claude Code CLI refuses to run as root)
+RUN useradd -m -s /bin/bash worker && \
+    mkdir -p /workspace && \
+    chown -R worker:worker /app /workspace
 
 # Playwright headless config
 ENV VP_HEADLESS=true
 ENV VP_BROWSER=chromium
+# Ensure Python output is sent straight to logs (no buffering)
+ENV PYTHONUNBUFFERED=1
+
+USER worker
+
+# Git identity for commits
+RUN git config --global user.email "prd-worker@millionlabs.ai" && \
+    git config --global user.name "PRD Worker"
 
 CMD ["python", "-m", "src.main"]
