@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS job_events (
 
 CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events (job_id);
 
+-- Job mode (full-build, deploy-only, auto)
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS mode TEXT NOT NULL DEFAULT 'full-build';
+
 -- Deploy phase columns (added Phase 6)
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS pr_url TEXT;
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS live_url TEXT;

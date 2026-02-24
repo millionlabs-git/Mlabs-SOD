@@ -10,6 +10,7 @@ const webhookBody = z.object({
   ),
   branch: z.string().default('main'),
   prd_path: z.string().default('docs/PRD.md'),
+  mode: z.enum(['full-build', 'deploy-only', 'auto']).default('full-build'),
   metadata: z.record(z.string(), z.unknown()).optional(),
   callback_url: z.string().url().optional(),
 });
@@ -42,6 +43,7 @@ webhookRouter.post('/webhook', async (req: Request, res: Response) => {
     repo_url: data.repo_url,
     branch: data.branch,
     prd_path: data.prd_path,
+    mode: data.mode,
     metadata: data.metadata,
     callback_url: data.callback_url,
   });

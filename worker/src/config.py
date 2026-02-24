@@ -12,6 +12,7 @@ class Config(BaseModel):
     repo_url: str
     branch: str = "main"
     prd_path: str = "docs/PRD.md"
+    mode: str = "full-build"  # full-build | deploy-only | auto
 
     # Orchestrator callback
     orchestrator_url: str
@@ -55,6 +56,7 @@ class Config(BaseModel):
             repo_url=os.environ["REPO_URL"],
             branch=os.environ.get("BRANCH", "main"),
             prd_path=os.environ.get("PRD_PATH", "docs/PRD.md"),
+            mode=os.environ.get("MODE", "full-build"),
             orchestrator_url=os.environ["ORCHESTRATOR_URL"],
             webhook_secret=os.environ["WEBHOOK_SECRET"],
             anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],

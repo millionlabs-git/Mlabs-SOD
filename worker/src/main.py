@@ -135,19 +135,38 @@ async def main() -> None:
         await reporter.report("prd_parsed")
         print(f"[main] PRD loaded ({len(prd_content)} chars)")
 
-        # 5. Detect completed phases if resuming
+        # 5. Detect completed phases based on mode
         plan_path = f"{repo_path}/docs/BUILD_PLAN.md"
-        skip = _detect_completed_phases(repo_path, plan_path) if resuming else {}
+
+        if config.mode == "deploy-only":
+            print("[main] Mode: deploy-only — skipping all build phases")
+            skip = {
+                "planning": True,
+                "scaffolding": True,
+                "building": True,
+                "review": True,
+                "deployment": False,
+            }
+        elif config.mode == "auto":
+            print("[main] Mode: auto — running maturity assessment...")
+            from src.pipeline.assessor import assess_maturity
+            skip = await assess_maturity(repo_path, prd_content, config, reporter)
+        elif resuming:
+            skip = _detect_completed_phases(repo_path, plan_path)
+        else:
+            skip = {}
 
         if skip:
             skipped = [phase for phase, done in skip.items() if done]
             if skipped:
-                print(f"[main] Resuming — skipping completed phases: {', '.join(skipped)}")
+                print(f"[main] Skipping completed phases: {', '.join(skipped)}")
 
         # 6. Plan
+        plan = None
         if skip.get("planning"):
             print("[main] Skipping planning (already complete)")
-            plan = parse_build_plan(plan_path)
+            if Path(plan_path).exists():
+                plan = parse_build_plan(plan_path)
         else:
             plan = await plan_build(prd_content, repo_path, config, reporter, branch_name)
 
@@ -160,8 +179,10 @@ async def main() -> None:
         # 8. Build tasks
         if skip.get("building"):
             print("[main] Skipping building (all tasks already complete)")
-        else:
+        elif plan:
             await build_tasks(plan, repo_path, config, reporter, branch_name)
+        else:
+            print("[main] Warning: no build plan available, skipping build tasks")
 
         # 9. Review
         if skip.get("review"):
@@ -169,8 +190,11 @@ async def main() -> None:
         else:
             await review_build(repo_path, config, reporter, branch_name)
 
-        # 10. Finalize (push + PR)
-        await finalize(repo_path, config, reporter, branch_name)
+        # 10. Finalize (push + PR) — skip in deploy-only mode
+        if config.mode != "deploy-only":
+            await finalize(repo_path, config, reporter, branch_name)
+        else:
+            print("[main] Skipping finalize (deploy-only mode)")
 
         # 11. Deploy (Neon DB + Netlify)
         if config.netlify_auth_token and not skip.get("deployment"):

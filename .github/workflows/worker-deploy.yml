@@ -1,0 +1,41 @@
+name: Worker Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'worker/**'
+
+jobs:
+  deploy:
+    name: Build and deploy worker
+    runs-on: ubuntu-latest
+    concurrency: worker-deploy-group
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCR
+        run: gcloud auth configure-docker
+
+      - name: Build and push worker image
+        run: |
+          docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:latest \
+                       -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:${{ github.sha }} \
+                       worker/
+          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:latest
+          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:${{ github.sha }}
+
+      - name: Update Cloud Run job
+        run: |
+          gcloud run jobs update prd-worker \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/prd-worker:latest \
+            --region ${{ secrets.GCP_REGION || 'europe-west1' }}

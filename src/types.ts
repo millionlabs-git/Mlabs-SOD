@@ -1,8 +1,11 @@
+export type JobMode = 'full-build' | 'deploy-only' | 'auto';
+
 export interface Job {
   id: string;
   repo_url: string;
   branch: string;
   prd_path: string;
+  mode: JobMode;
   status: JobStatus;
   metadata: Record<string, unknown> | null;
   callback_url: string | null;

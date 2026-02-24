@@ -36,6 +36,7 @@ export async function launchWorker(job: Job): Promise<LaunchResult> {
             { name: 'REPO_URL', value: job.repo_url },
             { name: 'BRANCH', value: job.branch },
             { name: 'PRD_PATH', value: job.prd_path },
+            { name: 'MODE', value: job.mode || 'full-build' },
             { name: 'ORCHESTRATOR_URL', value: config.orchestratorUrl },
             { name: 'WEBHOOK_SECRET', value: config.webhookSecret },
             { name: 'NEON_API_KEY', value: config.neonApiKey },

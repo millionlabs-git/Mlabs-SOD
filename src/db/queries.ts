@@ -5,19 +5,21 @@ interface CreateJobParams {
   repo_url: string;
   branch: string;
   prd_path: string;
+  mode?: string;
   metadata?: Record<string, unknown> | null;
   callback_url?: string | null;
 }
 
 export async function createJob(params: CreateJobParams): Promise<Job> {
   const { rows } = await pool.query<Job>(
-    `INSERT INTO jobs (repo_url, branch, prd_path, metadata, callback_url)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO jobs (repo_url, branch, prd_path, mode, metadata, callback_url)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
     [
       params.repo_url,
       params.branch,
       params.prd_path,
+      params.mode || 'full-build',
       params.metadata ? JSON.stringify(params.metadata) : null,
       params.callback_url || null,
     ]

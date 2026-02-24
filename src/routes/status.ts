@@ -23,6 +23,7 @@ statusRouter.get('/jobs/:id/status', async (req: Request, res: Response) => {
     repo_url: job.repo_url,
     branch: job.branch,
     prd_path: job.prd_path,
+    mode: job.mode,
     cloud_run_execution_id: job.cloud_run_execution_id,
     pr_url: job.pr_url,
     live_url: job.live_url,
