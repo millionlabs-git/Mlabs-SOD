@@ -1,9 +1,10 @@
-"""Thin wrapper around the Claude Agent SDK for running agent queries."""
+"""Wrapper around the Claude Agent SDK for running agent queries and agent teams."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from claude_agent_sdk import (
+    AgentDefinition,
     ClaudeAgentOptions,
     AssistantMessage,
     ResultMessage,
@@ -33,17 +34,35 @@ async def run_agent(
     model: str = "claude-sonnet-4-6",
     max_turns: int | None = None,
     context: str = "",
+    agents: dict[str, AgentDefinition] | None = None,
 ) -> AgentResult:
     """Run a Claude agent query and return the final result.
 
-    Streams messages to stdout for logging. Returns the ResultMessage
+    Streams messages to stdout for logging. Returns an AgentResult
     with cost and usage info.
+
+    Args:
+        prompt: The task prompt for the agent.
+        system_prompt: Optional system instructions.
+        allowed_tools: Tool whitelist. Defaults to standard dev tools.
+            When *agents* are provided, "Task" is automatically added.
+        mcp_servers: Optional MCP server configurations.
+        cwd: Working directory for Bash commands.
+        model: Model to use.
+        max_turns: Maximum number of agentic turns.
+        context: Project context injected at the top of the prompt.
+        agents: Subagent definitions. The orchestrator agent invokes
+            these via the Task tool based on each agent's description.
     """
     if context:
         prompt = f"## Project Context\n\n{context}\n\n---\n\n{prompt}"
 
     if allowed_tools is None:
         allowed_tools = ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
+
+    # Task tool is required for the orchestrator to invoke subagents
+    if agents and "Task" not in allowed_tools:
+        allowed_tools = [*allowed_tools, "Task"]
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt if system_prompt else None,
@@ -54,6 +73,7 @@ async def run_agent(
         model=model,
         max_turns=max_turns,
         sandbox={"enabled": False},
+        agents=agents if agents else None,
     )
 
     result: ResultMessage | None = None
