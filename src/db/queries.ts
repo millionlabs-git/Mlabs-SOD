@@ -1,5 +1,5 @@
 import { pool } from './client';
-import { Job, JobEvent, JobStatus } from '../types';
+import { Job, JobEvent, JobStatus, BuildStatus } from '../types';
 
 interface CreateJobParams {
   repo_url: string;
@@ -101,6 +101,17 @@ export async function getJobEvents(jobId: string): Promise<JobEvent[]> {
     [jobId]
   );
   return rows;
+}
+
+export async function updateBuildStatus(
+  id: string,
+  buildStatus: BuildStatus,
+  buildMessage: string
+): Promise<void> {
+  await pool.query(
+    `UPDATE jobs SET build_status = $1, build_message = $2, updated_at = now() WHERE id = $3`,
+    [buildStatus, buildMessage, id]
+  );
 }
 
 export async function markStaleJobsFailed(

@@ -14,6 +14,8 @@ export const config = {
   neonApiKey: process.env.NEON_API_KEY || '',
   flyApiToken: process.env.FLY_API_TOKEN || '',
   dryRun: process.env.DRY_RUN === 'true',
+  millionscopesWebhookUrl: process.env.MILLIONSCOPES_WEBHOOK_URL || '',
+  webhookBearerToken: process.env.WEBHOOK_BEARER_TOKEN || '',
 } as const;
 
 const required: (keyof typeof config)[] = [

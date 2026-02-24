@@ -14,11 +14,26 @@ export interface Job {
   live_url: string | null;
   fly_app_name: string | null;
   neon_project_id: string | null;
+  build_status: string;
+  build_message: string;
   created_at: Date;
   updated_at: Date;
 }
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export type BuildStatus =
+  | 'queued'
+  | 'cloning'
+  | 'installing'
+  | 'building'
+  | 'testing'
+  | 'deploying'
+  | 'deployed'
+  | 'completed'
+  | 'error'
+  | 'failed'
+  | 'cancelled';
 
 export interface JobEvent {
   id: string;

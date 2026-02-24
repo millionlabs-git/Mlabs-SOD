@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { config } from '../config';
 import { createJob, findExistingJob } from '../db/queries';
+import { sendBuildEvent } from '../webhook/notifier';
 
 const webhookBody = z.object({
   repo_url: z.string().url().refine(
@@ -47,6 +48,13 @@ webhookRouter.post('/webhook', async (req: Request, res: Response) => {
     metadata: data.metadata,
     callback_url: data.callback_url,
   });
+
+  // Notify MillionScopes that the job has been queued (fire-and-forget)
+  sendBuildEvent({
+    job_id: job.id,
+    status: 'queued',
+    message: 'Build queued',
+  }).catch(() => {});
 
   res.status(201).json({ job_id: job.id, status: 'pending' });
 });

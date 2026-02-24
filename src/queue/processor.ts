@@ -2,11 +2,13 @@ import { config } from '../config';
 import {
   getNextPendingJob,
   updateJobStatus,
+  updateBuildStatus,
   addJobEvent,
   countRunningJobs,
   markStaleJobsFailed,
 } from '../db/queries';
 import { launchWorker } from '../cloud-run/launcher';
+import { sendBuildEvent } from '../webhook/notifier';
 
 const MAX_CONCURRENT_JOBS = 5;
 
@@ -32,12 +34,29 @@ async function processNext(): Promise<void> {
       const { executionId } = await launchWorker(job);
       await updateJobStatus(job.id, 'running', executionId);
       await addJobEvent(job.id, 'worker_launched', { execution_id: executionId });
+
+      // Notify MillionScopes that the build is starting
+      await updateBuildStatus(job.id, 'queued', 'Worker launched');
+      sendBuildEvent({
+        job_id: job.id,
+        status: 'queued',
+        message: 'Worker launched',
+        metadata: { execution_id: executionId },
+      }).catch(() => {});
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
       console.error(`Failed to launch worker for job ${job.id}:`, err);
       await updateJobStatus(job.id, 'failed');
-      await addJobEvent(job.id, 'launch_failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      await addJobEvent(job.id, 'launch_failed', { error: errorMessage });
+
+      // Notify MillionScopes of the launch failure
+      await updateBuildStatus(job.id, 'error', `Failed to launch build worker: ${errorMessage}`);
+      sendBuildEvent({
+        job_id: job.id,
+        status: 'error',
+        message: `Failed to launch build worker: ${errorMessage}`,
+        metadata: { error: errorMessage },
+      }).catch(() => {});
     }
   } catch (err) {
     console.error('Processor error:', err);
