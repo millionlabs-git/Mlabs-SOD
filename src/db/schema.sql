@@ -24,3 +24,9 @@ CREATE TABLE IF NOT EXISTS job_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events (job_id);
+
+-- Deploy phase columns (added Phase 6)
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS pr_url TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS live_url TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS netlify_site_id TEXT;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS neon_project_id TEXT;

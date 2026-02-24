@@ -7,6 +7,10 @@ export interface Job {
   metadata: Record<string, unknown> | null;
   callback_url: string | null;
   cloud_run_execution_id: string | null;
+  pr_url: string | null;
+  live_url: string | null;
+  netlify_site_id: string | null;
+  neon_project_id: string | null;
   created_at: Date;
   updated_at: Date;
 }

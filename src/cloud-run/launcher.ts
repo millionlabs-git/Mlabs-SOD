@@ -38,6 +38,8 @@ export async function launchWorker(job: Job): Promise<LaunchResult> {
             { name: 'PRD_PATH', value: job.prd_path },
             { name: 'ORCHESTRATOR_URL', value: config.orchestratorUrl },
             { name: 'WEBHOOK_SECRET', value: config.webhookSecret },
+            { name: 'NEON_API_KEY', value: config.neonApiKey },
+            { name: 'NETLIFY_AUTH_TOKEN', value: config.netlifyAuthToken },
           ],
         },
       ],

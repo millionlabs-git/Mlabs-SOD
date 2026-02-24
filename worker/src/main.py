@@ -34,6 +34,7 @@ def _detect_completed_phases(repo_path: str, plan_path: str) -> dict[str, bool]:
         "scaffolding": False,
         "building": False,
         "review": False,
+        "deployment": False,
     }
 
     # Planning is done if BUILD_PLAN.md exists
@@ -72,6 +73,11 @@ def _detect_completed_phases(repo_path: str, plan_path: str) -> dict[str, bool]:
     review_files = list((repo / "docs").glob("*REVIEW*")) if (repo / "docs").exists() else []
     if phases["building"] and review_files:
         phases["review"] = True
+
+    # Deployment is done if DEPLOYMENT.md exists
+    deploy_info = repo / "docs" / "DEPLOYMENT.md"
+    if phases["review"] and deploy_info.exists():
+        phases["deployment"] = True
 
     return phases
 
@@ -165,6 +171,14 @@ async def main() -> None:
 
         # 10. Finalize (push + PR)
         await finalize(repo_path, config, reporter, branch_name)
+
+        # 11. Deploy (Neon DB + Netlify)
+        if config.netlify_auth_token and not skip.get("deployment"):
+            from src.pipeline.deployer import deploy
+            deploy_result = await deploy(repo_path, config, reporter, branch_name)
+            print(f"[main] Deploy result: {deploy_result}")
+        elif skip.get("deployment"):
+            print("[main] Skipping deployment (already complete)")
 
         print("[main] Build completed successfully")
 

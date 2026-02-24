@@ -11,6 +11,8 @@ export const config = {
   workerJobName: process.env.WORKER_JOB_NAME || 'prd-worker',
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '5000', 10),
   orchestratorUrl: process.env.ORCHESTRATOR_URL!,
+  neonApiKey: process.env.NEON_API_KEY || '',
+  netlifyAuthToken: process.env.NETLIFY_AUTH_TOKEN || '',
   dryRun: process.env.DRY_RUN === 'true',
 } as const;
 

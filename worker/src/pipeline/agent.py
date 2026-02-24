@@ -16,8 +16,9 @@ async def run_agent(
     *,
     system_prompt: str = "",
     allowed_tools: list[str] | None = None,
+    mcp_servers: dict | None = None,
     cwd: str = ".",
-    model: str = "claude-sonnet-4-5-20250929",
+    model: str = "claude-sonnet-4-6",
     max_turns: int | None = None,
 ) -> ResultMessage:
     """Run a Claude agent query and return the final result.
@@ -31,10 +32,12 @@ async def run_agent(
     options = ClaudeAgentOptions(
         system_prompt=system_prompt if system_prompt else None,
         allowed_tools=allowed_tools,
+        mcp_servers=mcp_servers if mcp_servers else None,
         permission_mode="bypassPermissions",
         cwd=cwd,
         model=model,
         max_turns=max_turns,
+        sandbox={"enabled": False},
     )
 
     result: ResultMessage | None = None

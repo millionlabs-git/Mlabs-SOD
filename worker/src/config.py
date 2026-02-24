@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class Config(BaseModel):
@@ -19,10 +19,18 @@ class Config(BaseModel):
 
     # API keys (set as Cloud Run Job secrets)
     anthropic_api_key: str
-    github_token: str
+
+    # GitHub App credentials
+    github_app_id: str
+    github_app_installation_id: str
+    github_app_private_key: str  # PEM-encoded RSA private key
+
+    # Deploy credentials (optional — deploy phase skipped if not set)
+    neon_api_key: str = ""
+    netlify_auth_token: str = ""
 
     # Model
-    model: str = "claude-sonnet-4-5-20250929"
+    model: str = "claude-sonnet-4-6"
 
     # Build settings
     max_task_retries: int = 3
@@ -36,6 +44,12 @@ class Config(BaseModel):
     @classmethod
     def from_env(cls) -> Config:
         """Load config from environment variables."""
+        # Private key may be base64-encoded (for env var transport)
+        private_key = os.environ["GITHUB_APP_PRIVATE_KEY"]
+        if not private_key.startswith("-----"):
+            import base64
+            private_key = base64.b64decode(private_key).decode()
+
         return cls(
             job_id=os.environ["JOB_ID"],
             repo_url=os.environ["REPO_URL"],
@@ -44,8 +58,12 @@ class Config(BaseModel):
             orchestrator_url=os.environ["ORCHESTRATOR_URL"],
             webhook_secret=os.environ["WEBHOOK_SECRET"],
             anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
-            github_token=os.environ["GITHUB_TOKEN"],
-            model=os.environ.get("MODEL", "claude-sonnet-4-5-20250929"),
+            github_app_id=os.environ["GITHUB_APP_ID"],
+            github_app_installation_id=os.environ["GITHUB_APP_INSTALLATION_ID"],
+            github_app_private_key=private_key,
+            neon_api_key=os.environ.get("NEON_API_KEY", ""),
+            netlify_auth_token=os.environ.get("NETLIFY_AUTH_TOKEN", ""),
+            model=os.environ.get("MODEL", "claude-sonnet-4-6"),
             max_task_retries=int(os.environ.get("MAX_TASK_RETRIES", "3")),
             task_timeout=int(os.environ.get("TASK_TIMEOUT", "300")),
             claude_config_path=os.environ.get("CLAUDE_CONFIG_PATH", "/app/claude-config"),
