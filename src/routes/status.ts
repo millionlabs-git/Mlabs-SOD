@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { config } from '../config';
-import { getJob, getJobEvents, addJobEvent, updateJobStatus } from '../db/queries';
+import { getJob, addJobEvent, updateJobStatus } from '../db/queries';
 import { pool } from '../db/client';
 import { forwardEventToMillionScopes } from '../webhook/notifier';
 
