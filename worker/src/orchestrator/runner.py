@@ -431,8 +431,9 @@ async def run_pipeline(
     )
     progress.update_tech_profile(asdict(tech_profile))
 
+    vp_skill_path = f"{config.vp_script_path.rsplit('/scripts', 1)[0]}/SKILL.md"
     loader = ComponentLoader(
-        config.claude_config_path, config.vp_skill_path, tech_profile
+        config.claude_config_path, vp_skill_path, tech_profile
     )
 
     has_db = bool(tech_profile.database)
