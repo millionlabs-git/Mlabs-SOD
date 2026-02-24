@@ -115,20 +115,26 @@ async def main() -> None:
         print(f"[main] Cloned to {repo_path}")
 
         # 3. Create or resume build branch
-        # Use a deterministic branch name based on repo+prd so re-triggers
-        # find the same branch and can resume where the previous run left off.
-        branch_hash = hashlib.sha256(
-            f"{config.repo_url}:{config.prd_path}".encode()
-        ).hexdigest()[:8]
-        branch_name = f"auto-build/{branch_hash}"
+        # In deploy-only mode, stay on the current branch (no build branch needed)
+        branch_name = config.branch
         resuming = False
 
-        if branch_exists_remote(repo_path, branch_name):
-            print(f"[main] Branch {branch_name} exists remotely — resuming")
-            checkout_existing_branch(repo_path, branch_name)
-            resuming = True
+        if config.mode != "deploy-only":
+            # Use a deterministic branch name based on repo+prd so re-triggers
+            # find the same branch and can resume where the previous run left off.
+            branch_hash = hashlib.sha256(
+                f"{config.repo_url}:{config.prd_path}".encode()
+            ).hexdigest()[:8]
+            branch_name = f"auto-build/{branch_hash}"
+
+            if branch_exists_remote(repo_path, branch_name):
+                print(f"[main] Branch {branch_name} exists remotely — resuming")
+                checkout_existing_branch(repo_path, branch_name)
+                resuming = True
+            else:
+                create_branch(repo_path, branch_name)
         else:
-            create_branch(repo_path, branch_name)
+            print(f"[main] Deploy-only mode — staying on {branch_name}")
 
         # 4. Parse PRD
         prd_content = parse_prd(repo_path, config.prd_path)
