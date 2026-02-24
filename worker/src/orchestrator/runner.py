@@ -49,13 +49,21 @@ def _build_subagents(
         prompt=(
             "You are an expert software architect. Read the PRD provided "
             "and produce a comprehensive architecture document.\n\n"
+            "IMPORTANT: This project uses a starter template with:\n"
+            "- Frontend: React 19 + Vite + Tailwind CSS + wouter (client/)\n"
+            "- Backend: Express 4 + express-session (server/)\n"
+            "- Database: PostgreSQL + Drizzle ORM (server/db/)\n"
+            "- Auth: Session-based with users table\n"
+            "- Deployment: Replit (.replit, replit.nix) + Fly.io (Dockerfile)\n\n"
+            "Design the architecture to BUILD ON this template. Read the "
+            "existing files (package.json, server/, client/, etc.) to "
+            "understand what's already in place.\n\n"
             "Decide on:\n"
-            "- Tech stack (languages, frameworks, databases)\n"
-            "- Directory structure\n"
-            "- Major components and responsibilities\n"
-            "- Data models and schemas (ALL tables, ALL columns, ALL relations)\n"
+            "- Additional data models and schemas beyond users (ALL tables, "
+            "ALL columns, ALL relations)\n"
             "- API contracts (every endpoint, request/response shapes)\n"
-            "- Authentication and authorization approach\n"
+            "- New pages and components\n"
+            "- Additional dependencies needed\n"
             "- Error handling strategy\n\n"
             "Write the architecture doc to docs/ARCHITECTURE.md."
         ),
@@ -96,28 +104,38 @@ def _build_subagents(
     scaffolder_system = loader.for_scaffolder()
     agents["scaffolder"] = AgentDefinition(
         description=(
-            "Project scaffolder. Use this agent to create the full project "
-            "skeleton — directory structure, package.json with ALL deps, "
-            "configs, database schema, route stubs, shared types, test infra. "
-            "It must build clean with zero errors."
+            "Project scaffolder. Use this agent to extend the existing template "
+            "with project-specific code — add new database tables, API routes, "
+            "pages, and dependencies based on the architecture. The template "
+            "already provides: React + Vite + Tailwind, Express API, Drizzle + "
+            "PostgreSQL, session auth, and Replit configs. It must build clean."
         ),
         prompt=(
             f"{scaffolder_system}\n\n" if scaffolder_system else ""
         ) + (
-            "Create the full project scaffold based on docs/ARCHITECTURE.md "
-            "and docs/BUILD_PLAN.md.\n\n"
-            "1. Directory structure matching the architecture exactly\n"
-            "2. Package manager config with ALL dependencies for the full build\n"
-            "3. Language configs (tsconfig.json, .eslintrc, etc.)\n"
-            "4. Database schema/ORM models — all tables, all columns, all relations\n"
-            "5. API route stubs with correct paths, methods, parameter types\n"
-            "6. Shared types/interfaces\n"
-            "7. Test infrastructure\n"
-            "8. .env.example with all required vars\n\n"
+            "A starter template has already been applied to this project. It "
+            "includes:\n"
+            "- React 19 + Vite + Tailwind CSS frontend (client/)\n"
+            "- Express 4 API backend (server/)\n"
+            "- Drizzle ORM + PostgreSQL (server/db/)\n"
+            "- Session-based auth with a users table\n"
+            "- Replit deployment configs (.replit, replit.nix)\n"
+            "- Dockerfile for Fly.io\n\n"
+            "Your job is to EXTEND this template based on docs/ARCHITECTURE.md "
+            "and docs/BUILD_PLAN.md:\n\n"
+            "1. Add new database tables/models to server/db/schema.ts\n"
+            "2. Add new API route files and register them in server/routes.ts\n"
+            "3. Add new page components in client/src/pages/ and routes in App.tsx\n"
+            "4. Add any additional npm dependencies needed (update package.json)\n"
+            "5. Add shared types to shared/types.ts\n"
+            "6. Update .env.example with any new required vars\n"
+            "7. Add test infrastructure if not already present\n\n"
             "Rules:\n"
+            "- Do NOT recreate files that already exist — extend them\n"
             "- Install ALL deps and verify `npm run build` (or equivalent) succeeds\n"
             "- No TODO comments — use minimal valid implementations instead\n"
-            "- Define real data models with all fields, not just id and name"
+            "- Define real data models with all fields, not just id and name\n"
+            "- Keep the Replit configs (.replit, replit.nix) and Dockerfile intact"
         ),
         tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
         model="sonnet",
@@ -337,6 +355,17 @@ You are the orchestrator for building a complete software project from a PRD.
 You have specialized subagents available — delegate work to them and coordinate
 the overall build process.
 
+## Template
+
+A starter template (saas-starter) has been applied to this project. It provides:
+- **Frontend:** React 19 + Vite + Tailwind CSS + wouter routing (client/)
+- **Backend:** Express 4 + express-session auth (server/)
+- **Database:** Drizzle ORM + PostgreSQL (server/db/)
+- **Auth:** Session-based with users table, login/register/logout routes
+- **Deployment:** Replit configs (.replit, replit.nix) + Dockerfile for Fly.io
+
+The scaffolder should EXTEND this template, not recreate it from scratch.
+
 ## Your Responsibilities
 
 1. **Read and understand** the PRD below
@@ -350,14 +379,16 @@ the overall build process.
 
 ### Phase 1: Planning
 1. Send the PRD to the **architect** subagent to design the system
-2. Read docs/ARCHITECTURE.md to verify it's comprehensive
-3. Send to the **planner** subagent to decompose into tasks
-4. Read docs/BUILD_PLAN.md to verify tasks are well-defined
-5. Commit: `git add -A && git commit -m "docs: add architecture and build plan"`
-6. Push: `git push origin {branch_name}`
+2. Tell the architect that a template is already in place (React + Express + Drizzle + PostgreSQL)
+   and the architecture should build on top of it
+3. Read docs/ARCHITECTURE.md to verify it's comprehensive
+4. Send to the **planner** subagent to decompose into tasks
+5. Read docs/BUILD_PLAN.md to verify tasks are well-defined
+6. Commit: `git add -A && git commit -m "docs: add architecture and build plan"`
+7. Push: `git push origin {branch_name}`
 
 ### Phase 2: Scaffold
-1. Send to the **scaffolder** subagent to create the project skeleton
+1. Send to the **scaffolder** subagent to extend the template
 2. Verify the build works: run `npm run build` (or equivalent)
 3. If build fails, use **build-error-resolver** to fix
 4. Commit: `git add -A && git commit -m "chore: scaffold project structure"`

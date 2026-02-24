@@ -20,6 +20,7 @@ from src.prd_parser import parse_prd
 from src.prompts.system import set_config_path, set_vp_skill_path
 from src.orchestrator.runner import run_pipeline
 from src.orchestrator.progress import ProgressTracker
+from src.pipeline.template import apply_template
 
 
 async def main() -> None:
@@ -75,6 +76,16 @@ async def main() -> None:
                 create_branch(repo_path, branch_name)
         else:
             print(f"[main] Deploy-only mode — staying on {branch_name}")
+
+        # 3b. Apply template (if not resuming an existing build)
+        if not resuming and config.template:
+            applied = apply_template(
+                config.template, repo_path, config.templates_path
+            )
+            if applied:
+                await reporter.report("template_applied", {
+                    "template": config.template
+                })
 
         # 4. Parse PRD
         prd_content = parse_prd(repo_path, config.prd_path)

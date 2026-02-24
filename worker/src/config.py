@@ -37,6 +37,10 @@ class Config(BaseModel):
     max_task_retries: int = 3
     task_timeout: int = 300
 
+    # Template settings
+    template: str = "saas-starter"  # template name under templates_path
+    templates_path: str = "/app/templates"
+
     # Paths (internal to the container)
     claude_config_path: str = "/app/claude-config"
     vp_script_path: str = "/app/visual-playwright/scripts/vp.mjs"
@@ -68,6 +72,8 @@ class Config(BaseModel):
             model=os.environ.get("MODEL", "claude-sonnet-4-6"),
             max_task_retries=int(os.environ.get("MAX_TASK_RETRIES", "3")),
             task_timeout=int(os.environ.get("TASK_TIMEOUT", "300")),
+            template=os.environ.get("TEMPLATE", "saas-starter"),
+            templates_path=os.environ.get("TEMPLATES_PATH", "/app/templates"),
             claude_config_path=os.environ.get("CLAUDE_CONFIG_PATH", "/app/claude-config"),
             vp_script_path=os.environ.get("VP_SCRIPT_PATH", "/app/visual-playwright/scripts/vp.mjs"),
             workspace_path=os.environ.get("WORKSPACE_PATH", "/workspace"),

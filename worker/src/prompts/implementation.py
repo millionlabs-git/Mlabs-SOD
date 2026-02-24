@@ -95,40 +95,43 @@ The previous implementation attempt for "{task.name}" had issues:
 
 def scaffold_prompt() -> str:
     return """\
-Based on the architecture at docs/ARCHITECTURE.md and the build plan \
-at docs/BUILD_PLAN.md, create the full project scaffold.
+A starter template has been applied to this project. Extend it based on the \
+architecture at docs/ARCHITECTURE.md and the build plan at docs/BUILD_PLAN.md.
 
 ## Read first
 
 1. Read `docs/PRD.md` for product requirements
 2. Read `docs/ARCHITECTURE.md` for tech stack decisions, data models, API contracts
 3. Read `docs/BUILD_PLAN.md` for the task breakdown
+4. Read the existing template files: `package.json`, `server/routes.ts`, \
+`server/db/schema.ts`, `client/src/App.tsx`, `shared/types.ts`
 
-## Create the scaffold
+## Template already provides
 
-1. **Directory structure** matching the architecture exactly
-2. **Package manager config** with ALL dependencies needed for the full build \
-(not just the scaffold — include everything from the architecture doc: \
-UI libraries, database drivers, auth packages, testing frameworks, etc.)
-3. **Language config** (tsconfig.json, .eslintrc, etc.)
-4. **Database schema or ORM models** — fully define all tables/models from the \
-architecture doc with all columns, types, relations, and indexes
-5. **API route stubs** — create the route files with correct paths and HTTP methods \
-from the architecture doc. Each route handler should have the correct function \
-signature and return type, but implementation will come in later tasks.
-6. **Shared types/interfaces** — define all TypeScript interfaces, API request/response \
-types, and shared constants referenced in the architecture
-7. **Test infrastructure** (vitest/jest/pytest config, test helpers, fixtures)
-8. **Environment config** (.env.example with all required vars documented)
-9. **README** with setup instructions
+- React 19 + Vite + Tailwind CSS frontend (client/)
+- Express 4 API backend (server/)
+- Drizzle ORM + PostgreSQL (server/db/)
+- Session-based auth with users table (login, register, logout)
+- Replit configs (.replit, replit.nix)
+- Dockerfile for Fly.io
+
+## Extend the scaffold
+
+1. **Add new database tables** to server/db/schema.ts (keep existing users table)
+2. **Add new API routes** — create route files and register in server/routes.ts
+3. **Add new page components** in client/src/pages/ and add routes in App.tsx
+4. **Add npm dependencies** to package.json for any new libraries needed
+5. **Add shared types** to shared/types.ts
+6. **Update .env.example** with any new required vars
+7. **Add test infrastructure** (vitest/jest config, test helpers)
 
 ## Rules
 
+- Do NOT recreate or overwrite existing template files — extend them
 - Install ALL dependencies and verify the project builds with zero errors
 - The scaffold should compile/build clean — no type errors, no missing imports
 - Define real data models with all fields — not just `id` and `name`
 - Route stubs should have correct paths, methods, and parameter types
-- Do NOT leave TODO comments — if something belongs in a later task, \
-leave a minimal valid implementation (e.g. an empty array response, \
-a component that renders its name) rather than a TODO
+- Do NOT leave TODO comments — use minimal valid implementations instead
+- Keep the Replit configs (.replit, replit.nix) and Dockerfile intact
 """

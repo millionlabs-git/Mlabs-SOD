@@ -45,12 +45,15 @@ RUN git clone --depth 1 https://github.com/Finn-ML/visual-playwright.git /tmp/vp
     rm -rf /tmp/vp && \
     cd visual-playwright && npm init -y && npm install playwright
 
+# Copy project templates
+COPY templates/ ./templates/
+
 # Python deps
-COPY requirements.txt .
+COPY worker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # App code
-COPY src/ ./src/
+COPY worker/src/ ./src/
 
 # Create non-root user (Claude Code CLI refuses to run as root)
 RUN useradd -m -s /bin/bash worker && \

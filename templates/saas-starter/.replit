@@ -1,0 +1,22 @@
+run = "npm run dev"
+entrypoint = "server/index.ts"
+modules = ["nodejs-20:v8-20230920-bd784b9"]
+
+hidden = [".config", "dist", "node_modules", "drizzle"]
+
+[nix]
+channel = "stable-24_05"
+
+[env]
+PATH = "/home/runner/$REPL_SLUG/.config/npm/node_global/bin:/home/runner/$REPL_SLUG/node_modules/.bin:./node_modules/.bin"
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix", "package.json"]
+
+[deployment]
+run = ["sh", "-c", "npm run start"]
+build = ["sh", "-c", "npm install && npm run build"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80
