@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   await bootstrap();
 
   const app = express();
-  app.use(express.json({ limit: '10kb' }));
+  app.use(express.json({ limit: '1mb' }));
 
   // Health check
   app.get('/health', async (_req, res) => {
