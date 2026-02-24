@@ -38,10 +38,13 @@ async def build_tasks(
     """Execute each task sequentially with retries and visual verification."""
     completed_tasks = _get_completed_task_names(repo_path)
 
+    completed_task_names: list[str] = []
+
     for i, task in enumerate(plan.tasks):
         # Skip tasks that were already committed in a previous run
         if task.name in completed_tasks:
             print(f"[builder] Skipping task {i + 1}/{plan.total_tasks} (already committed): {task.name}")
+            completed_task_names.append(task.name)
             await reporter.report("task_completed", {
                 "task_number": i + 1,
                 "skipped": True,
@@ -54,9 +57,13 @@ async def build_tasks(
             "task_name": task.name,
         })
 
-        success = await _build_single_task(task, i, plan.total_tasks, repo_path, config, reporter)
+        success = await _build_single_task(
+            task, i, plan.total_tasks, repo_path, config, reporter,
+            completed_task_names=completed_task_names,
+        )
 
         if success:
+            completed_task_names.append(task.name)
             git_commit(repo_path, f"feat: {task.name}")
             if branch_name:
                 git_push(repo_path, branch_name)
@@ -77,6 +84,7 @@ async def _build_single_task(
     repo_path: str,
     config: Config,
     reporter: StatusReporter,
+    completed_task_names: list[str] | None = None,
 ) -> bool:
     """Attempt to build a single task with retries. Returns True on success."""
     system = load_rules(["coding-style", "testing", "security"])
@@ -84,7 +92,10 @@ async def _build_single_task(
 
     for attempt in range(config.max_task_retries):
         if attempt == 0:
-            prompt = build_task_prompt(task, task_index, total_tasks)
+            prompt = build_task_prompt(
+                task, task_index, total_tasks,
+                completed_tasks=completed_task_names,
+            )
         else:
             prompt = retry_prompt(task, last_errors)
             await reporter.report("task_retry", {
@@ -98,6 +109,7 @@ async def _build_single_task(
             allowed_tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
             cwd=repo_path,
             model=config.model,
+            max_turns=40,
         )
 
         # Verify tests pass

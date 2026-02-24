@@ -26,6 +26,7 @@ async def scaffold_project(
         allowed_tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
         cwd=repo_path,
         model=config.model,
+        max_turns=30,
     )
 
     await reporter.report("scaffold_complete")
