@@ -245,7 +245,31 @@ async def deploy(
         netlify_site_id = deploy_info.get("site_id")
         print(f"[deployer] Deployed to: {live_url}")
     else:
-        print("[deployer] Warning: Netlify deployment info file not found")
+        print("[deployer] Warning: Netlify deployment info file not found, trying CLI lookup...")
+        # Fallback: query Netlify CLI for the site we created
+        site_name = f"sod-{config.job_id[:8]}"
+        try:
+            import subprocess as sp
+            result = sp.run(
+                ["npx", "netlify-cli", "api", "listSites", "--json"],
+                capture_output=True, text=True, cwd=repo_path, timeout=30,
+            )
+            if result.returncode == 0:
+                import re
+                # Search for our site URL in any netlify output
+                for variant in [site_name, f"{site_name}-app", f"{site_name}-live"]:
+                    url = f"https://{variant}.netlify.app"
+                    # Quick check if site responds
+                    check = sp.run(
+                        ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if check.stdout.strip() not in ("000", "404"):
+                        live_url = url
+                        print(f"[deployer] Found site via fallback: {live_url}")
+                        break
+        except Exception as e:
+            print(f"[deployer] Fallback lookup failed: {e}")
 
     # --- Step 5: Verify live site ---
     if live_url:
