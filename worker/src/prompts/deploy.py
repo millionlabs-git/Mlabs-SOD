@@ -93,30 +93,28 @@ def flyio_deploy_prompt(job_id: str, db_url: str | None) -> str:
 
     db_secret_hint = ""
     if db_url:
-        db_secret_hint = f"""
-IMPORTANT: Set the database URL as a secret:
-```bash
-flyctl secrets set DATABASE_URL="{db_url}" -a {app_name}
-```
-"""
+        db_secret_hint = f'\nflyctl secrets set DATABASE_URL="{db_url}" -a {app_name}'
 
     return f"""\
 Deploy this full-stack project to Fly.io as a single container.
 
-## Step 1: Analyse the project structure
+## Step 1: Analyse the project and find the Dockerfile
 
-Understand the project layout:
-- Identify the backend framework (Express, Fastify, etc.) and its entry point
-- Identify the frontend framework (Vite, Next.js, CRA, etc.) and its build output dir
-- Check package.json scripts for build and start commands
-- Check for existing Dockerfile — if one exists and is reasonable, use it
+1. Check if a `Dockerfile` already exists in the repo root
+2. Identify the backend server entry point and the port it listens on (check server source code, \
+Dockerfile EXPOSE, or .env files — do NOT assume 3000)
+3. Identify the frontend build output directory
 
-## Step 2: Generate a Dockerfile (if one doesn't exist)
+**CRITICAL: If a Dockerfile already exists, USE IT as-is. Do NOT generate a new one. \
+Only create a Dockerfile if none exists in the project.**
 
-Create a multi-stage Dockerfile:
+## Step 2: Generate a Dockerfile ONLY if none exists
+
+Skip this step entirely if a Dockerfile was found in Step 1.
+
+If no Dockerfile exists, create one. For a typical full-stack Node.js app:
 
 ```dockerfile
-# Stage 1: Install dependencies and build
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
@@ -124,35 +122,36 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-# Stage 2: Production image
 FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 COPY --from=builder /app/<build-output> ./<build-output>
 COPY --from=builder /app/<server-files> ./<server-files>
-EXPOSE 3000
+EXPOSE <PORT>
 CMD ["node", "<server-entry-point>"]
 ```
 
-Adapt this template based on the project structure:
-- For monorepos with `frontend/` and `backend/` dirs, copy both
-- Ensure the Express/backend server serves the frontend static files (e.g. `express.static('frontend/dist')`)
-- If the server doesn't already serve static files, add that code
-- Detect the correct build output dir: `dist/`, `build/`, `.next/`, `out/`
-- Detect the correct port from server code (default 3000)
+Adapt based on the project:
+- For monorepos with `frontend/` and `backend/` dirs, copy both build outputs
+- Ensure the backend serves the frontend static files in production
+- Use `--ignore-scripts` in production npm ci to avoid devDependency scripts (husky, etc.)
 
 ## Step 3: Generate fly.toml
 
-Create `fly.toml`:
+Detect the port from Step 1 and create `fly.toml`:
 ```toml
 app = "{app_name}"
 primary_region = "lhr"
 
 [build]
 
+[env]
+  NODE_ENV = "production"
+  PORT = "<detected-port>"
+
 [http_service]
-  internal_port = 3000
+  internal_port = <detected-port>
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
@@ -164,49 +163,67 @@ primary_region = "lhr"
   cpus = 1
 ```
 
-Adjust `internal_port` if the app uses a different port.
+## Step 4: Create Fly app and set ALL secrets BEFORE deploying
 
-## Step 4: Deploy to Fly.io
-
+Create the app first:
 ```bash
-# Create the app (ignore error if already exists)
 flyctl apps create {app_name} --org personal || true
-
-# Deploy
-flyctl deploy -a {app_name}
 ```
 
-If the app name is taken, try `{app_name}-app` or `{app_name}-live` and update fly.toml accordingly.
+If the name is taken, try `{app_name}-app` or `{app_name}-live` and update fly.toml.
 
-## Step 5: Set environment variables / secrets
+Now set secrets — the app MUST have these before the first deploy or it will crash on startup:
 {db_secret_hint}
+
 Detect and set other required env vars:
 - Read `.env.example` or similar template files
 - Scan for `process.env.*` or `import.meta.env.*` references
 - **Auto-generate** secrets: `JWT_SECRET`, `SESSION_SECRET`, `NEXTAUTH_SECRET` → `openssl rand -hex 32`
 - **Derive from app URL**: `APP_URL`, `BASE_URL`, `NEXTAUTH_URL` → `https://{app_name}.fly.dev`
-- **Flag as missing**: third-party keys (STRIPE_*, OAuth, external APIs)
+- **Flag as missing**: third-party keys (STRIPE_*, OAuth, external APIs) — set placeholder values \
+like "CHANGE_ME" so the app can at least start
 
-Set secrets via CLI:
+Set all secrets in one command:
 ```bash
-flyctl secrets set VAR_NAME="value" -a {app_name}
+flyctl secrets set KEY1="val1" KEY2="val2" ... -a {app_name}
 ```
 
-Set non-secret env vars in fly.toml under `[env]` section and redeploy if needed.
+## Step 5: Deploy to Fly.io
 
-## Step 6: Save deployment info
+```bash
+flyctl deploy -a {app_name}
+```
 
-Write to /tmp/fly-deployment.json:
-```json
+If the deploy fails, read the error, fix the Dockerfile or config, and retry.
+
+## Step 6: Verify the app is reachable
+
+```bash
+# Wait for the app to start, then check it responds
+sleep 10
+curl -s -o /dev/null -w "%{{http_code}}" https://{app_name}.fly.dev
+```
+
+If you get 000 or 502, check logs with `flyctl logs -a {app_name}` and fix the issue.
+
+## Step 7: Write deployment info file
+
+**YOU MUST DO THIS — the pipeline will fail if this file is missing.**
+
+```bash
+cat > /tmp/fly-deployment.json << 'DEPLOY_EOF'
 {{
   "app_name": "{app_name}",
   "app_url": "https://{app_name}.fly.dev",
-  "env_vars_set": ["list of vars set"],
-  "env_vars_missing": ["list of vars that need manual setup"]
+  "env_vars_set": [],
+  "env_vars_missing": []
 }}
+DEPLOY_EOF
 ```
 
-IMPORTANT: You MUST write this file. The pipeline reads it to report the live URL.
+Update the `env_vars_set` and `env_vars_missing` arrays with the actual values from Step 4.
+
+**Write this file BEFORE doing anything else at the end. This is NOT optional.**
 
 Print the live URL when done.
 """
