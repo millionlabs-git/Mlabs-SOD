@@ -167,7 +167,7 @@ primary_region = "lhr"
 
 Create the app first:
 ```bash
-flyctl apps create {app_name} --org personal || true
+flyctl apps create {app_name} --org mlabs-dev || true
 ```
 
 If the name is taken, try `{app_name}-app` or `{app_name}-live` and update fly.toml.
