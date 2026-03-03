@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.config import Config
@@ -50,6 +51,70 @@ def _neon_mcp(config: Config) -> dict:
             "env": {"NEON_API_KEY": config.neon_api_key},
         }
     }
+
+
+@dataclass
+class DeployCheckpointResult:
+    """Result of a deploy checkpoint."""
+    passed: bool
+    issues: list[str] = field(default_factory=list)
+    logs: str = ""
+
+
+def deploy_checkpoint(
+    repo_path: str,
+    app_name: str,
+    checkpoint_name: str,
+    health_path: str = "/",
+    timeout: int = 180,
+) -> DeployCheckpointResult:
+    """Lightweight redeploy to an existing Fly app and verify health.
+
+    Does NOT create the app or set secrets — assumes the app already exists.
+    Used for Checkpoints 2 and 3 (Checkpoint 1 uses the full deploy flow).
+    """
+    issues: list[str] = []
+    logs = ""
+
+    print(f"[deploy-checkpoint:{checkpoint_name}] Deploying to {app_name}...")
+
+    # flyctl deploy (reuses existing app + machine)
+    try:
+        result = subprocess.run(
+            ["flyctl", "deploy", "--app", app_name, "--yes"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        logs = (result.stdout + "\n" + result.stderr).strip()
+        if result.returncode != 0:
+            issues.append(f"flyctl deploy failed (exit {result.returncode})")
+            return DeployCheckpointResult(passed=False, issues=issues, logs=logs)
+    except subprocess.TimeoutExpired:
+        issues.append(f"Deploy timed out after {timeout}s")
+        return DeployCheckpointResult(passed=False, issues=issues, logs="timeout")
+
+    # Health check
+    url = f"https://{app_name}.fly.dev{health_path}"
+    print(f"[deploy-checkpoint:{checkpoint_name}] Health check: {url}")
+
+    try:
+        check = subprocess.run(
+            ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url],
+            capture_output=True, text=True, timeout=15,
+        )
+        status = check.stdout.strip()
+        if status in ("200", "201", "301", "302"):
+            print(f"[deploy-checkpoint:{checkpoint_name}] Health check passed ({status})")
+        else:
+            issues.append(f"Health check failed: {url} returned {status}")
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
+        issues.append(f"Health check error: {e}")
+
+    return DeployCheckpointResult(
+        passed=len(issues) == 0, issues=issues, logs=logs
+    )
 
 
 def _try_build(repo_path: str) -> tuple[bool, str]:

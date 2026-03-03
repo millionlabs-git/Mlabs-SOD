@@ -26,6 +26,8 @@ class PipelineProgress:
     phases: dict[str, PhaseProgress] = field(default_factory=dict)
     total_cost_usd: float = 0.0
     current_phase: str = ""
+    deploy_app_name: str = ""
+    deploy_url: str = ""
 
 
 class ProgressTracker:
@@ -56,6 +58,8 @@ class ProgressTracker:
             phases=phases,
             total_cost_usd=data.get("total_cost_usd", 0.0),
             current_phase=data.get("current_phase", ""),
+            deploy_app_name=data.get("deploy_app_name", ""),
+            deploy_url=data.get("deploy_url", ""),
         )
 
     def save(self) -> None:
@@ -123,6 +127,12 @@ class ProgressTracker:
     def is_task_completed(self, task_name: str) -> bool:
         """Check if a task phase is completed (checks phase f'task:{task_name}')."""
         return self.is_phase_completed(f"task:{task_name}")
+
+    def set_deploy_info(self, app_name: str, deploy_url: str) -> None:
+        """Store Fly app name and URL for deploy checkpoints."""
+        self.progress.deploy_app_name = app_name
+        self.progress.deploy_url = deploy_url
+        self.save()
 
     def update_tech_profile(self, profile: dict) -> None:
         """Set tech_profile."""

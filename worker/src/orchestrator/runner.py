@@ -21,59 +21,49 @@ from src.orchestrator.tech_detector import detect_tech_stack, TechProfile
 from src.orchestrator.component_loader import ComponentLoader
 from src.orchestrator.context import ContextBuilder
 from src.pipeline.agent import run_agent
-from src.pipeline.models import parse_build_plan
 from src.repo import git_commit, git_push
 
 
 def _build_subagents(
     loader: ComponentLoader,
+    context_builder: ContextBuilder,
     config: Config,
     tech_profile: TechProfile,
     repo_path: str,
     has_db: bool,
 ) -> dict[str, AgentDefinition]:
-    """Build the AgentDefinition map for the orchestrator's subagents."""
+    """Build the AgentDefinition map — 5 consolidated subagents."""
 
     vp_script = config.vp_script_path
     screenshots_base = f"{repo_path}/docs/screenshots"
 
     agents: dict[str, AgentDefinition] = {}
 
-    # ── Architect ──────────────────────────────────────────────────────
+    # ── Architect (absorbs planner) ───────────────────────────────────
+    architect_system = loader.for_architect()
     agents["architect"] = AgentDefinition(
         description=(
-            "System architect. Use this agent to design the technical "
-            "architecture from a PRD — tech stack, data models, API "
-            "contracts, directory structure. It writes docs/ARCHITECTURE.md."
+            "System architect and planner. Use this agent to design the "
+            "technical architecture AND decompose it into ordered build tasks. "
+            "It writes docs/ARCHITECTURE.md and docs/BUILD_PLAN.md."
         ),
         prompt=(
+            f"{architect_system}\n\n" if architect_system else ""
+        ) + (
             "You are an expert software architect. Read the PRD provided "
-            "and produce a comprehensive architecture document.\n\n"
+            "and produce TWO documents:\n\n"
+            "## Document 1: docs/ARCHITECTURE.md\n"
             "Decide on:\n"
             "- Tech stack (languages, frameworks, databases)\n"
             "- Directory structure\n"
             "- Major components and responsibilities\n"
             "- Data models and schemas (ALL tables, ALL columns, ALL relations)\n"
-            "- API contracts (every endpoint, request/response shapes)\n"
+            "- API contracts (every endpoint, method, request/response shapes)\n"
+            "- Frontend routes and pages (every page, its purpose, key components)\n"
             "- Authentication and authorization approach\n"
             "- Error handling strategy\n\n"
-            "Write the architecture doc to docs/ARCHITECTURE.md."
-        ),
-        tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
-        model="sonnet",
-    )
-
-    # ── Planner ────────────────────────────────────────────────────────
-    agents["planner"] = AgentDefinition(
-        description=(
-            "Task planner. Use this agent to decompose the architecture "
-            "into an ordered list of implementation tasks. It reads "
-            "docs/ARCHITECTURE.md and writes docs/BUILD_PLAN.md."
-        ),
-        prompt=(
-            "You are a project planner. Read docs/ARCHITECTURE.md and "
-            "docs/PRD.md, then break the implementation into 8-15 ordered "
-            "tasks.\n\n"
+            "## Document 2: docs/BUILD_PLAN.md\n"
+            "Break the implementation into 8-15 ordered tasks.\n\n"
             "Each task should be a complete vertical slice — not just "
             "'create file X'. It should produce working, connected code.\n\n"
             "Order: database layer → API routes → frontend pages → integration.\n\n"
@@ -86,26 +76,31 @@ def _build_subagents(
             "- **Route:** /path (if UI)\n"
             "- **Acceptance Criteria:**\n"
             "  - Specific, testable criterion\n\n"
-            "Write the plan to docs/BUILD_PLAN.md."
+            "Write ARCHITECTURE.md first, then BUILD_PLAN.md."
         ),
-        tools=["Read", "Write"],
-        model="sonnet",
+        tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
+        model="opus",
     )
 
-    # ── Scaffolder ─────────────────────────────────────────────────────
+    # ── Scaffolder ────────────────────────────────────────────────────
     scaffolder_system = loader.for_scaffolder()
+    scaffolder_context = context_builder.for_scaffolder()
     agents["scaffolder"] = AgentDefinition(
         description=(
             "Project scaffolder. Use this agent to create the full project "
             "skeleton — directory structure, package.json with ALL deps, "
             "configs, database schema, route stubs, shared types, test infra. "
-            "It must build clean with zero errors."
+            "It must build clean with zero errors and npm test must pass."
         ),
         prompt=(
             f"{scaffolder_system}\n\n" if scaffolder_system else ""
         ) + (
-            "Create the full project scaffold based on docs/ARCHITECTURE.md "
-            "and docs/BUILD_PLAN.md.\n\n"
+            f"## Project Context\n\n{scaffolder_context}\n\n---\n\n"
+            if scaffolder_context else ""
+        ) + (
+            "Create the full project scaffold based on the architecture and "
+            "build plan above (also available in docs/ARCHITECTURE.md and "
+            "docs/BUILD_PLAN.md).\n\n"
             "1. Directory structure matching the architecture exactly\n"
             "2. Package manager config with ALL dependencies for the full build\n"
             "3. Language configs (tsconfig.json, .eslintrc, etc.)\n"
@@ -113,9 +108,17 @@ def _build_subagents(
             "5. API route stubs with correct paths, methods, parameter types\n"
             "6. Shared types/interfaces\n"
             "7. Test infrastructure\n"
-            "8. .env.example with all required vars\n\n"
+            "8. E2E test infrastructure:\n"
+            "   - Install vitest (or jest) + supertest for API integration testing\n"
+            "   - Create a test helper that starts the app server and provides a supertest instance\n"
+            "   - Create a test DB setup/teardown helper (or in-memory SQLite fallback)\n"
+            "   - Add a working example integration test that hits a health/root endpoint\n"
+            "   - Ensure `npm test` works and passes from the start\n"
+            "   - Install @playwright/test for browser e2e (configured but no tests yet)\n"
+            "9. .env.example with all required vars\n\n"
             "Rules:\n"
             "- Install ALL deps and verify `npm run build` (or equivalent) succeeds\n"
+            "- `npm test` MUST pass before scaffold is complete — run it and paste the output\n"
             "- No TODO comments — use minimal valid implementations instead\n"
             "- Define real data models with all fields, not just id and name"
         ),
@@ -123,8 +126,11 @@ def _build_subagents(
         model="sonnet",
     )
 
-    # ── Builder (feature implementer) ──────────────────────────────────
+    # ── Builder (feature implementer) ─────────────────────────────────
     builder_system = loader.for_builder()
+    builder_context = context_builder.for_builder(
+        task_name="", task_files=[], completed_tasks=[]
+    )
     agents["builder"] = AgentDefinition(
         description=(
             "Feature builder. Use this agent to implement a specific task "
@@ -135,164 +141,146 @@ def _build_subagents(
         prompt=(
             f"{builder_system}\n\n" if builder_system else ""
         ) + (
-            "You are a feature implementer. When given a task:\n\n"
-            "1. Read docs/PRD.md, docs/ARCHITECTURE.md, and docs/BUILD_PLAN.md\n"
-            "2. Read the existing source files you'll modify\n"
-            "3. FULLY IMPLEMENT every function, component, and route\n"
-            "4. Wire everything together — API to DB, UI to API, imports to usage\n"
-            "5. Follow existing code patterns and conventions\n"
-            "6. Handle error cases, loading states, edge cases\n"
-            "7. Run `npm run build` and fix any errors\n\n"
-            "CRITICAL RULES:\n"
+            f"## Project Context\n\n{builder_context}\n\n---\n\n"
+            if builder_context else ""
+        ) + (
+            "You are a feature implementer who works with TEST-DRIVEN DEVELOPMENT.\n\n"
+            "## TDD Cycle (mandatory for every task)\n\n"
+            "For each feature in the task:\n"
+            "1. **RED** — Write a failing API integration test FIRST:\n"
+            "   - Use supertest to hit the real endpoint with real DB\n"
+            "   - Test the actual behavior: POST creates, GET retrieves, etc.\n"
+            "   - Run the test. Watch it FAIL. Confirm it fails for the RIGHT reason.\n"
+            "   - If the test passes immediately, it proves nothing — delete it and write a real one.\n\n"
+            "2. **GREEN** — Write the MINIMUM code to make the test pass:\n"
+            "   - Implement the route, controller, DB query — whatever the test needs\n"
+            "   - Wire everything together: route → handler → DB → response\n"
+            "   - Run the test again. It MUST pass now.\n\n"
+            "3. **REFACTOR** — Clean up while tests stay green:\n"
+            "   - Remove duplication, improve naming\n"
+            "   - Run tests after each change to confirm nothing broke\n\n"
+            "## Verification Gate (before claiming done)\n\n"
+            "You MUST run these commands and paste the ACTUAL output:\n"
+            "```\n"
+            "npm run build    # Must exit 0\n"
+            "npm test         # Must show 0 failures\n"
+            "```\n"
+            "If you haven't pasted real output from these commands, you are NOT done.\n"
+            "NO 'should work', 'looks correct', 'probably passes' — EVIDENCE ONLY.\n\n"
+            "## Testing Rules\n\n"
+            "- Test REAL behavior, not mocks. Hit real endpoints, query real DB.\n"
+            "- Every API route must have an integration test.\n"
+            "- Every DB write must be verified with a read-back in the test.\n"
+            "- Do NOT mock the database or HTTP layer in integration tests.\n"
+            "- Tests written AFTER code pass immediately — that proves nothing.\n\n"
+            "## Implementation Rules\n\n"
             "- No placeholder returns, no // TODO, no pass stubs\n"
-            "- Every piece of code must be complete and functional\n"
+            "- Wire everything: API → DB, UI → API, imports → usage\n"
             "- Use dependencies already in package.json\n"
-            "- Search your own code for TODO/FIXME/placeholder and replace with real code"
+            "- Search for TODO/FIXME/placeholder and replace with real code"
         ),
         tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
         model="sonnet",
     )
 
-    # ── Build Error Resolver ───────────────────────────────────────────
-    resolver_system = loader.for_build_error_resolver()
-    agents["build-error-resolver"] = AgentDefinition(
+    # ── Fixer (absorbs build-error-resolver) ──────────────────────────
+    fixer_system = loader.for_build_error_resolver()
+    agents["fixer"] = AgentDefinition(
         description=(
-            "Build error resolver. Use this agent when builds or tests fail. "
-            "Give it the error output and it will diagnose and fix the issues."
+            "Fixer. Use this agent when builds fail, tests fail, deploys fail, "
+            "or review finds critical issues. Give it the error output or issue "
+            "description and it will diagnose and fix systematically."
         ),
         prompt=(
-            f"{resolver_system}\n\n" if resolver_system else ""
+            f"{fixer_system}\n\n" if fixer_system else ""
         ) + (
-            "You fix build and test failures. When given error output:\n"
-            "1. Identify every distinct error\n"
-            "2. Read the relevant source files\n"
-            "3. Fix ALL issues, not just the first one\n"
-            "4. Verify the fix by running the build/test again\n"
-            "5. Check for TODO/FIXME/placeholder code and replace with real code"
+            "You fix build, test, deploy, and review failures using SYSTEMATIC DEBUGGING.\n\n"
+            "## Phase 1: Investigate (before ANY fix)\n"
+            "- Read the FULL error message carefully\n"
+            "- Reproduce: run the failing command yourself\n"
+            "- Gather evidence: which file, which line, what was expected vs actual\n"
+            "- Check recent changes: what was the last thing modified?\n\n"
+            "## Phase 2: Analyze\n"
+            "- Find a WORKING example of similar code in the project\n"
+            "- Compare the working code with the broken code line by line\n"
+            "- Identify the specific difference causing the failure\n\n"
+            "## Phase 3: Fix (one change at a time)\n"
+            "- Form ONE hypothesis about the root cause\n"
+            "- Make ONE targeted change\n"
+            "- Run the failing command again to verify\n"
+            "- If it still fails, REVERT and try a different hypothesis\n\n"
+            "## Phase 4: Escalate\n"
+            "- After 3 failed fix attempts, STOP patching\n"
+            "- The problem is likely architectural, not a typo\n"
+            "- Read the architecture doc and reconsider the approach\n"
+            "- Report what you've tried and what you think the real issue is\n\n"
+            "## Verification\n"
+            "After fixing, run BOTH:\n"
+            "```\n"
+            "npm run build    # Must exit 0\n"
+            "npm test         # Must show 0 failures\n"
+            "```\n"
+            "Paste the actual output. No assumptions."
         ),
         tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
         model="sonnet",
     )
 
-    # ── Code Reviewer ──────────────────────────────────────────────────
+    # ── Reviewer (absorbs code/security/db reviewers + e2e + pr-writer) ─
     reviewer_system = loader.for_reviewer()
-    agents["code-reviewer"] = AgentDefinition(
+    reviewer_context = context_builder.for_reviewer()
+    db_instructions = ""
+    if has_db:
+        db_instructions = (
+            "\n## Database Review\n"
+            "- Schema design (normalization, indexes, constraints)\n"
+            "- Query patterns (N+1 problems, missing indexes)\n"
+            "- Migration safety\n"
+            "- Connection pooling and error handling\n"
+        )
+    agents["reviewer"] = AgentDefinition(
         description=(
-            "Code reviewer. Use this agent to review the entire codebase "
-            "for quality, error handling, test coverage, and performance. "
-            "It writes docs/CODE_REVIEW.md and fixes critical issues directly."
+            "Reviewer. Use this agent for the full review phase: code quality, "
+            "security audit, database review, Playwright e2e browser tests, and "
+            "PR description generation. One agent, one pass over the codebase."
         ),
         prompt=(
             f"{reviewer_system}\n\n" if reviewer_system else ""
         ) + (
-            "Review the entire codebase for:\n"
-            "1. Code quality and maintainability\n"
-            "2. Error handling completeness\n"
-            "3. Test coverage gaps\n"
-            "4. Performance concerns\n\n"
-            "Write your review to docs/CODE_REVIEW.md with file:line references.\n"
-            "Fix critical issues directly. Document minor issues in the review."
-        ),
-        tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
-        model="sonnet",
-    )
-
-    # ── Security Reviewer ──────────────────────────────────────────────
-    security_system = loader.for_security_reviewer()
-    agents["security-reviewer"] = AgentDefinition(
-        description=(
-            "Security reviewer. Use this agent to audit the codebase for "
-            "security vulnerabilities — injection, auth issues, hardcoded "
-            "secrets, insecure configs, dependency vulns."
-        ),
-        prompt=(
-            f"{security_system}\n\n" if security_system else ""
+            f"## Project Context\n\n{reviewer_context}\n\n---\n\n"
+            if reviewer_context else ""
         ) + (
-            "Perform a security review. Check for:\n"
+            "You are a comprehensive reviewer. Perform ALL of the following "
+            "in a single pass:\n\n"
+            "## 1. Code Quality Review\n"
+            "- Code quality and maintainability\n"
+            "- Error handling completeness\n"
+            "- Test coverage gaps\n"
+            "- Performance concerns\n\n"
+            "## 2. Security Audit\n"
             "- Hardcoded secrets or credentials\n"
             "- Injection vulnerabilities (SQL, command, XSS)\n"
             "- Authentication and authorization issues\n"
             "- Dependency vulnerabilities (run npm audit if applicable)\n"
             "- Insecure configurations\n"
-            "- Missing input validation\n\n"
-            "Append findings to docs/CODE_REVIEW.md under '## Security Review'.\n"
-            "Fix critical security issues directly."
-        ),
-        tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
-        model="sonnet",
-    )
-
-    # ── Database Reviewer (conditional) ────────────────────────────────
-    if tech_profile.needs_db_reviewer:
-        db_system = loader.for_db_reviewer()
-        agents["database-reviewer"] = AgentDefinition(
-            description=(
-                "Database reviewer. Use this agent to review database schema, "
-                "queries, and migrations for correctness, performance, and "
-                "security. Only use when the project has a database."
-            ),
-            prompt=(
-                f"{db_system}\n\n" if db_system else ""
-            ) + (
-                "Review the database layer:\n"
-                "- Schema design (normalization, indexes, constraints)\n"
-                "- Query patterns (N+1 problems, missing indexes)\n"
-                "- Migration safety\n"
-                "- Connection pooling and error handling\n\n"
-                "Append findings to docs/CODE_REVIEW.md under '## Database Review'.\n"
-                "Fix critical issues directly."
-            ),
-            tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
-            model="sonnet",
-        )
-
-    # ── Visual E2E Runner ──────────────────────────────────────────────
-    e2e_system = loader.for_e2e_runner()
-    agents["visual-e2e"] = AgentDefinition(
-        description=(
-            "Visual E2E tester. Use this agent to start the dev server, "
-            "navigate every page with Visual Playwright, take screenshots, "
-            "verify the UI renders correctly, and fix visual issues."
-        ),
-        prompt=(
-            f"{e2e_system}\n\n" if e2e_system else ""
-        ) + (
-            f"Perform a full visual E2E walkthrough:\n"
-            f"1. Read docs/PRD.md and docs/ARCHITECTURE.md for routes\n"
-            f"2. Start the dev server\n"
-            f"3. Use Visual Playwright to visit every page:\n"
-            f"   node {vp_script} goto \"http://localhost:3000\" "
-            f"--screenshot {screenshots_base}/e2e/home.png\n"
-            f"4. Test key user flows (auth, CRUD, forms)\n"
-            f"5. Fix visual issues found\n"
-            f"6. Write docs/VISUAL_REVIEW.md with pass/fail per page\n"
-            f"7. Close sessions: node {vp_script} close\n"
+            "- Missing input validation\n"
+            f"{db_instructions}\n"
+            "## 3. Playwright E2E Browser Tests\n"
+            "- Start the dev server (or use deployed URL if provided)\n"
+            f"- Use Visual Playwright: node {vp_script} goto \"<url>\" "
+            f"--screenshot {screenshots_base}/e2e/<page>.png\n"
+            "- Navigate every route listed in ARCHITECTURE.md\n"
+            "- Test key user flows (signup, login, CRUD operations)\n"
+            "- Take screenshots of each page\n"
+            f"- Close sessions: node {vp_script} close\n\n"
+            "## 4. Write Review Documents\n"
+            "- Write CODE_REVIEW.md with file:line references for all findings\n"
+            "- Write PR_DESCRIPTION.md summarizing what was built\n"
+            "- Fix critical issues directly. Document minor issues in the review.\n"
             f"Keep screenshots in {screenshots_base}/e2e/"
         ),
         tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
-        model="sonnet",
-    )
-
-    # ── PR Description Writer ──────────────────────────────────────────
-    agents["pr-writer"] = AgentDefinition(
-        description=(
-            "PR description writer. Use this agent to generate a "
-            "comprehensive pull request description. It reads all docs "
-            "and writes docs/PR_DESCRIPTION.md."
-        ),
-        prompt=(
-            "Generate a comprehensive PR description:\n"
-            "1. Summarize what was built (1-2 paragraphs)\n"
-            "2. Map PRD requirements to implementing code\n"
-            "3. List architectural decisions\n"
-            "4. Note deferred items or limitations\n"
-            "5. Include test coverage stats\n"
-            "6. Reference screenshots from docs/screenshots/\n\n"
-            "Read docs/PRD.md, ARCHITECTURE.md, BUILD_PLAN.md, CODE_REVIEW.md.\n"
-            "Write to docs/PR_DESCRIPTION.md."
-        ),
-        tools=["Read", "Write", "Bash", "Grep", "Glob"],
-        model="sonnet",
+        model="opus",
     )
 
     return agents
@@ -317,84 +305,171 @@ def _build_orchestrator_prompt(
                 f"{', '.join(skipped)}**\n"
             )
 
-    deploy_instructions = ""
-    if config.fly_api_token and not skip.get("deployment"):
-        deploy_instructions = (
-            "\n## Phase 6: Deploy\n"
-            "After finalizing, deploy the project. This is handled by "
-            "existing deployment code — just ensure the build is production-ready.\n"
+    deploy_enabled = bool(config.fly_api_token)
+    deploy_checkpoint_instructions = ""
+    if deploy_enabled:
+        deploy_checkpoint_instructions = (
+            "\n### Deploy Checkpoint 1: Smoke Test (after scaffold)\n"
+            "1. Create Fly app and provision infrastructure\n"
+            "2. Run `flyctl deploy` and verify health endpoint returns 200\n"
+            "3. If fails, send deploy logs to **fixer**, redeploy (max 3 attempts)\n"
+            "4. Save the app name and URL — you will redeploy to the SAME app later\n\n"
+        )
+
+    deploy_midpoint = ""
+    if deploy_enabled:
+        deploy_midpoint = (
+            "\n   After every 3 completed tasks, run a deploy checkpoint:\n"
+            "   - `flyctl deploy --app <app-name>` (same app from Checkpoint 1)\n"
+            "   - Verify health endpoint returns 200\n"
+            "   - If fails, send deploy logs to **fixer**, redeploy (max 3)\n"
+        )
+
+    deploy_pre_review = ""
+    if deploy_enabled:
+        deploy_pre_review = (
+            "\n### Deploy Checkpoint 3: Full Deploy (before review)\n"
+            "1. `flyctl deploy --app <app-name>` (same app)\n"
+            "2. Verify health check passes\n"
+            "3. Note the deployed URL — the reviewer will run e2e tests against it\n\n"
         )
 
     db_note = ""
     if has_db:
         db_note = (
-            "\nThis project has a database. Use the database-reviewer "
-            "subagent during the review phase.\n"
+            "\nThis project has a database. The reviewer will include "
+            "database schema and query review in its pass.\n"
         )
 
     return f"""\
 You are the orchestrator for building a complete software project from a PRD.
-You have specialized subagents available — delegate work to them and coordinate
-the overall build process.
+You have 5 specialized subagents — delegate work to them and coordinate the build.
 
 ## Your Responsibilities
 
 1. **Read and understand** the PRD below
 2. **Delegate phases** to the appropriate subagents in order
-3. **Verify outputs** after each subagent completes — read the files they created
-4. **Course-correct** if a subagent produces poor output — provide guidance and re-run
-5. **Track progress** — after each phase, commit artifacts with git
-6. **Coordinate the full pipeline** from architecture through to a working, tested app
+3. **Verify outputs** using the verification scripts after each phase
+4. **Course-correct** if verification fails — send specific issues to the **fixer**
+5. **Track progress** — commit and push after each verified phase
+6. **Never trust claims** — run `npm run build` and `npm test` YOURSELF after every subagent
 {skip_instructions}
+## Verification Scripts
+
+After each phase, run the appropriate verification command and READ the output:
+```bash
+# Architecture verification
+python -m src.orchestrator.verifier architecture
+
+# Scaffold verification
+python -m src.orchestrator.verifier scaffold
+
+# Task verification (after each builder task)
+python -m src.orchestrator.verifier task "<task_name>"
+
+# Review verification
+python -m src.orchestrator.verifier review
+
+# LLM acceptance criteria check (after each builder task)
+python -m src.orchestrator.llm_judge "<task_name>" "<acceptance_criteria>"
+```
+Each outputs JSON: {{"passed": true/false, "issues": [...]}}
+If passed=false, send the issues to the **fixer** subagent, then re-verify.
+The LLM judge outputs: {{"passed": true/false, "evidence": "...", "missing": [...]}}
+If passed=false, send the missing items back to the **builder**.
+
 ## Pipeline Phases
 
-### Phase 1: Planning
-1. Send the PRD to the **architect** subagent to design the system
-2. Read docs/ARCHITECTURE.md to verify it's comprehensive
-3. Send to the **planner** subagent to decompose into tasks
-4. Read docs/BUILD_PLAN.md to verify tasks are well-defined
+### Phase 1: Architecture + Planning
+1. Send the PRD to the **architect** subagent
+   - It produces BOTH docs/ARCHITECTURE.md and docs/BUILD_PLAN.md
+2. Run architecture verification: `python -m src.orchestrator.verifier architecture`
+3. If verification fails, provide the issues to **architect** and re-run
+4. Read docs/BUILD_PLAN.md — verify tasks have acceptance criteria
 5. Commit: `git add -A && git commit -m "docs: add architecture and build plan"`
 6. Push: `git push origin {branch_name}`
 
 ### Phase 2: Scaffold
-1. Send to the **scaffolder** subagent to create the project skeleton
-2. Verify the build works: run `npm run build` (or equivalent)
-3. If build fails, use **build-error-resolver** to fix
+1. Send to the **scaffolder** subagent
+2. Run scaffold verification: `python -m src.orchestrator.verifier scaffold`
+3. If fails, send issues to **fixer**, then re-verify (max 3 attempts)
 4. Commit: `git add -A && git commit -m "chore: scaffold project structure"`
 5. Push: `git push origin {branch_name}`
-
+{deploy_checkpoint_instructions}\
 ### Phase 3: Build (implement each task)
 Read docs/BUILD_PLAN.md and implement tasks in order:
 1. For each task, send it to the **builder** subagent with:
    - Task number, name, description, acceptance criteria
    - List of already-completed tasks for context
-2. After each task, run `npm run build` to verify
-3. If build fails, use **build-error-resolver** to fix
-4. Commit each completed task: `git add -A && git commit -m "feat: <task name>"`
-5. Push after each task: `git push origin {branch_name}`
+   - Reminder: "Write a failing API integration test FIRST, then implement"
+2. After the builder completes, verify:
+   - Run `npm run build` — read the output, confirm exit 0
+   - Run `npm test` — read the output, confirm 0 failures
+   - Run task verification: `python -m src.orchestrator.verifier task "<task_name>"`
+   - If ANY fails, send issues to **fixer**, re-verify (max 3 attempts per task)
+   - Run LLM acceptance check:
+     `python -m src.orchestrator.llm_judge "<task_name>" "<acceptance_criteria from BUILD_PLAN.md>"`
+     Read the JSON output. If passed=false, the "missing" list tells you what's incomplete.
+     Send missing items back to the **builder** with specific instructions.
+3. Spot-check the builder's work:
+   - Read the test file — does it test real behavior (not mocks)?
+   - Read the implementation — is it wired to the DB and routes?
+   - If you find TODO stubs or unwired code, send back to **builder** with specific feedback
+4. Commit ONLY after verified: `git add -A && git commit -m "feat: <task name>"`
+5. Push: `git push origin {branch_name}`
+{deploy_midpoint}\
 
-### Phase 4: Review
-1. Use **code-reviewer** to review the full codebase
-2. Use **security-reviewer** for security audit
-{db_note}3. Use **visual-e2e** to screenshot and verify all pages
-4. Fix any critical issues found
-5. Commit: `git add -A && git commit -m "docs: add review results"`
-6. Push: `git push origin {branch_name}`
+### Pre-Review: User Flow Audit
+Before starting reviews, verify every key user flow yourself:
+1. Read docs/ARCHITECTURE.md and list every user-facing flow
+   (signup, login, create/read/update/delete for each resource, file upload, search, etc.)
+2. For EACH flow, trace the full path through the code:
+   - Frontend: is there a button/form/link that triggers it?
+   - API call: does the frontend actually call the endpoint?
+   - Backend: does the route handler do real work (not a stub/mock)?
+   - Database: does it read/write real data (not hardcoded/mock)?
+   - Response: does the result flow back to the UI?
+3. Run: `grep -r "mock\\|Mock\\|hardcoded\\|TODO\\|FIXME\\|placeholder" src/`
+   and investigate every hit.
+4. For auth specifically: verify the REAL auth provider is configured,
+   not anonymous/mock sign-in. Check for: signInAnonymously,
+   mock-auth, fake-token, hardcoded-user, skip-auth.
+5. Any broken flows → send to **fixer** with: "Flow X is broken because [specific gap]. Fix it."
+6. Re-verify after fixes.
+{deploy_pre_review}\
+### Phase 4: Review & E2E Tests
+1. Send to the **reviewer** subagent — it performs code quality review,
+   security audit,{" database review," if has_db else ""} Playwright e2e browser tests,
+   and writes CODE_REVIEW.md + PR_DESCRIPTION.md
+{db_note}
+2. Fix-verify loop (max 5 rounds):
+   a. Collect all issues from the reviewer (code, security, e2e failures)
+   b. Send critical issues to **fixer**
+   c. Run `npm run build` — confirm exit 0
+   d. Run `npm test` — confirm 0 failures
+   e. Re-run **reviewer** on any pages/areas that previously failed
+   f. If new issues found, repeat from (a)
+   g. If build/tests/e2e all pass clean → exit loop
+   h. After 5 rounds, document remaining issues in CODE_REVIEW.md and proceed
+
+3. Run review verification: `python -m src.orchestrator.verifier review`
+4. Commit: `git add -A && git commit -m "docs: add review results"`
+5. Push: `git push origin {branch_name}`
 
 ### Phase 5: Finalize
-1. Use **pr-writer** to generate the PR description
-2. Commit: `git add -A && git commit -m "docs: add PR description"`
+1. Final deploy: `flyctl deploy --app <app-name>` (if deploy enabled)
+2. Commit: `git add -A && git commit -m "docs: finalize"`
 3. Push: `git push origin {branch_name}`
-4. Create a GitHub PR: `gh pr create --title "<descriptive title>" --body-file docs/PR_DESCRIPTION.md --base main --head {branch_name}`
-{deploy_instructions}
+4. Create PR: `gh pr create --title "<descriptive title>" --body-file docs/PR_DESCRIPTION.md --base main --head {branch_name}`
+
 ## Rules
 
 - Run subagents **one at a time** — each phase depends on the previous
-- After each subagent completes, **read the key output files** to verify quality
-- If a subagent's output is poor (missing features, TODO stubs, broken build),
-  provide specific feedback and re-run with guidance
-- Always commit and push after completing each phase
-- If `npm run build` fails after a subagent, use **build-error-resolver** before proceeding
+- After EVERY subagent, **run verification** and read the output — never skip this
+- If verification fails, send specific issues to **fixer** and re-verify
+- Maximum 3 retry attempts per verification failure before moving on
+- Always commit and push after each verified phase
+- The **reviewer** runs Playwright e2e against the deployed URL if available, otherwise localhost
 
 ## PRD
 
@@ -435,11 +510,14 @@ async def run_pipeline(
     loader = ComponentLoader(
         config.claude_config_path, vp_skill_path, tech_profile
     )
+    context_builder = ContextBuilder(repo_path)
 
     has_db = bool(tech_profile.database)
 
     # ── Build subagent definitions ────────────────────────────────────
-    subagents = _build_subagents(loader, config, tech_profile, repo_path, has_db)
+    subagents = _build_subagents(
+        loader, context_builder, config, tech_profile, repo_path, has_db
+    )
 
     # ── Build orchestrator prompt ─────────────────────────────────────
     orchestrator_prompt = _build_orchestrator_prompt(
@@ -458,16 +536,28 @@ async def run_pipeline(
         result = await run_agent(
             prompt=orchestrator_prompt,
             system_prompt=(
-                "You are a build orchestrator. You manage a team of specialized "
+                "You are a build orchestrator. You manage a team of 5 specialized "
                 "subagents to build a complete software project from a PRD. "
-                "Delegate work to subagents and verify their output. "
-                "Commit and push after each phase."
+                "Delegate work to subagents and verify their output.\n\n"
+                "VERIFICATION RULE: Never trust a subagent's claim that something works. "
+                "After every subagent completes:\n"
+                "1. Run `npm run build` and `npm test` YOURSELF and read the actual output\n"
+                "2. Run the appropriate verification script and read the JSON result\n"
+                "3. If either shows failures, send the issues to the fixer before proceeding\n\n"
+                "ACCEPTANCE CRITERIA RULE: After deterministic verification passes for a task, "
+                "run the LLM judge to check acceptance criteria. If the judge says criteria are "
+                "not met, send the specific missing items back to the builder. The judge is cheap "
+                "(Haiku) — always run it.\n\n"
+                "USER FLOW RULE: Before the review phase, trace every user-facing flow "
+                "through the code. If any flow has a mock, stub, anonymous auth, or "
+                "missing UI element — it is NOT complete. Send it to the fixer.\n\n"
+                "Commit and push after each phase — but ONLY after verified green tests."
             ),
             allowed_tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob", "Task"],
             agents=subagents,
             cwd=repo_path,
-            model=config.model,
-            max_turns=200,  # orchestrator needs many turns to coordinate full build
+            model="claude-opus-4-6",  # Orchestrator uses Opus for coordination judgment
+            max_turns=200,
         )
 
         progress.record_agent_result(

@@ -11,3 +11,6 @@ dependencies = [
 
 [project.scripts]
 worker = "src.main:run"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

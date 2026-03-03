@@ -89,17 +89,12 @@ class ComponentLoader:
     # -- Public methods: phase-specific system prompts --
 
     def for_architect(self) -> str:
-        """Build system prompt for the architect phase."""
+        """Build system prompt for the architect phase (includes planning)."""
         return self._combine([
             self._load_agent("architect.md"),
+            self._load_agent("planner.md"),
             self._load_skill("api-design"),
             self._load_tech_rules(),
-        ])
-
-    def for_planner(self) -> str:
-        """Build system prompt for the planner phase."""
-        return self._combine([
-            self._load_agent("planner.md"),
         ])
 
     def for_scaffolder(self) -> str:
@@ -125,32 +120,18 @@ class ComponentLoader:
         ])
 
     def for_reviewer(self) -> str:
-        """Build system prompt for the reviewer phase."""
+        """Build system prompt for the consolidated reviewer phase.
+
+        Loads code review, security review, DB review, and e2e testing skills
+        into a single reviewer agent.
+        """
         return self._combine([
             self._load_agent("code-reviewer.md"),
             self._load_skill("security-review"),
-            self._load_tech_rules(),
-        ])
-
-    def for_security_reviewer(self) -> str:
-        """Build system prompt for the security reviewer phase."""
-        return self._combine([
-            self._load_agent("security-reviewer.md"),
             self._load_skill("security-scan"),
-        ])
-
-    def for_db_reviewer(self) -> str:
-        """Build system prompt for the database reviewer phase."""
-        return self._combine([
-            self._load_agent("database-reviewer.md"),
-            self._load_skill("postgres-patterns"),
-            self._load_skill("database-migrations"),
-        ])
-
-    def for_e2e_runner(self) -> str:
-        """Build system prompt for the e2e runner phase."""
-        return self._combine([
-            self._load_agent("e2e-runner.md"),
             self._load_skill("e2e-testing"),
             self._load_skill("visual-playwright"),
+            self._load_skill("postgres-patterns"),
+            self._load_skill("database-migrations"),
+            self._load_tech_rules(),
         ])
