@@ -5,6 +5,7 @@ import { config, validateConfig } from './config';
 import { pool, checkConnection } from './db/client';
 import { webhookRouter } from './routes/webhook';
 import { statusRouter } from './routes/status';
+import { dashboardRouter } from './routes/dashboard';
 import { startProcessor, stopProcessor } from './queue/processor';
 
 async function bootstrap(): Promise<void> {
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
 
   app.use(webhookRouter);
   app.use(statusRouter);
+  app.use(dashboardRouter);
 
   startProcessor();
 

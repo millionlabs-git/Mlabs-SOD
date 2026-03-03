@@ -22,6 +22,7 @@ from src.orchestrator.component_loader import ComponentLoader
 from src.orchestrator.context import ContextBuilder
 from src.pipeline.agent import run_agent
 from src.repo import git_commit, git_push
+from src.prompts.testing import user_flows_instructions, seed_data_instructions
 
 
 def _build_subagents(
@@ -45,7 +46,8 @@ def _build_subagents(
         description=(
             "System architect and planner. Use this agent to design the "
             "technical architecture AND decompose it into ordered build tasks. "
-            "It writes docs/ARCHITECTURE.md and docs/BUILD_PLAN.md."
+            "It writes docs/ARCHITECTURE.md, docs/BUILD_PLAN.md, "
+            "docs/USER_FLOWS.md, and docs/SEED_DATA.md."
         ),
         prompt=(
             f"{architect_system}\n\n" if architect_system else ""
@@ -76,7 +78,7 @@ def _build_subagents(
             "- **Route:** /path (if UI)\n"
             "- **Acceptance Criteria:**\n"
             "  - Specific, testable criterion\n\n"
-            "Write ARCHITECTURE.md first, then BUILD_PLAN.md."
+            "Write ARCHITECTURE.md first, then BUILD_PLAN.md, then USER_FLOWS.md, then SEED_DATA.md." + user_flows_instructions() + seed_data_instructions()
         ),
         tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
         model="opus",
@@ -457,10 +459,13 @@ Before starting reviews, verify every key user flow yourself:
 5. Push: `git push origin {branch_name}`
 
 ### Phase 5: Finalize
-1. Final deploy: `flyctl deploy --app <app-name>` (if deploy enabled)
-2. Commit: `git add -A && git commit -m "docs: finalize"`
-3. Push: `git push origin {branch_name}`
-4. Create PR: `gh pr create --title "<descriptive title>" --body-file docs/PR_DESCRIPTION.md --base main --head {branch_name}`
+1. Commit: `git add -A && git commit -m "docs: finalize"`
+2. Push: `git push origin {branch_name}`
+3. Create PR: `gh pr create --title "<descriptive title>" --body-file docs/PR_DESCRIPTION.md --base main --head {branch_name}`
+
+**NOTE:** Deployment, test data seeding, and E2E testing are handled automatically
+by the pipeline after the orchestrator completes. Do NOT deploy yourself in Phase 5.
+The PR description should mention that E2E tests will be run post-deploy.
 
 ## Rules
 
@@ -558,6 +563,7 @@ async def run_pipeline(
             cwd=repo_path,
             model="claude-opus-4-6",  # Orchestrator uses Opus for coordination judgment
             max_turns=200,
+            reporter=reporter,
         )
 
         progress.record_agent_result(
@@ -596,6 +602,85 @@ async def run_pipeline(
             progress.fail_phase("deployment", str(exc))
             progress.save()
             raise
+
+        # ── Post-deploy: Seed test data ──────────────────────────────
+        if deploy_result and deploy_result.get("neon_project_id"):
+            progress.start_phase("seeding")
+            try:
+                from src.pipeline.seeder import seed_test_data
+
+                creds_file = Path("/tmp/neon-credentials.json")
+                db_url = None
+                if creds_file.exists():
+                    db_url = json.loads(creds_file.read_text()).get("database_url")
+
+                if db_url:
+                    seed_ok = await seed_test_data(
+                        repo_path, db_url, config, reporter
+                    )
+                    if seed_ok:
+                        progress.complete_phase("seeding")
+                    else:
+                        progress.fail_phase("seeding", "Seeding returned False")
+                else:
+                    print("[runner] No DB URL available — skipping seeding")
+                    progress.skip_phase("seeding")
+
+                progress.save()
+            except Exception as exc:
+                progress.fail_phase("seeding", str(exc))
+                progress.save()
+                # Seeding failure is non-fatal — continue to E2E tests
+                print(f"[runner] Seeding failed (non-fatal): {exc}")
+
+        # ── Post-deploy: E2E testing loop ────────────────────────────
+        live_url = deploy_result.get("live_url") if deploy_result else None
+        fly_app_name = deploy_result.get("fly_app_name") if deploy_result else None
+
+        if live_url and fly_app_name:
+            progress.start_phase("e2e_testing")
+            try:
+                from src.pipeline.e2e_loop import run_e2e_loop
+                import os
+                import subprocess
+
+                # Set RESEND_API_KEY as fly secret for the app
+                if config.resend_api_key:
+                    os.environ.setdefault("FLY_API_TOKEN", config.fly_api_token)
+                    subprocess.run(
+                        ["flyctl", "secrets", "set",
+                         f"RESEND_API_KEY={config.resend_api_key}",
+                         "-a", fly_app_name],
+                        capture_output=True, text=True, timeout=30,
+                    )
+
+                test_report = await run_e2e_loop(
+                    repo_path=repo_path,
+                    app_url=live_url,
+                    fly_app_name=fly_app_name,
+                    config=config,
+                    reporter=reporter,
+                    branch_name=branch_name,
+                    timeout_hours=5,
+                    cost_limit_usd=150.0,
+                )
+
+                # Commit test artifacts
+                git_commit(repo_path, "docs: add E2E test report and screenshots")
+                if branch_name:
+                    git_push(repo_path, branch_name)
+
+                if test_report["all_passed"]:
+                    progress.complete_phase("e2e_testing")
+                else:
+                    progress.fail_phase("e2e_testing",
+                        f"{test_report['failed']} flows still failing")
+
+                progress.save()
+            except Exception as exc:
+                progress.fail_phase("e2e_testing", str(exc))
+                progress.save()
+                print(f"[runner] E2E testing failed: {exc}")
 
     elif skip.get("deployment"):
         progress.skip_phase("deployment")

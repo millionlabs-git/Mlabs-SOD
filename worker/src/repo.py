@@ -53,8 +53,8 @@ def branch_exists_remote(repo_path: str, branch_name: str) -> bool:
 
 def checkout_existing_branch(repo_path: str, branch_name: str) -> None:
     """Fetch and checkout an existing remote branch."""
-    run(["git", "fetch", "origin", branch_name], cwd=repo_path)
-    run(["git", "checkout", "-b", branch_name, f"origin/{branch_name}"], cwd=repo_path)
+    run(["git", "fetch", "origin", f"{branch_name}:{branch_name}"], cwd=repo_path)
+    run(["git", "checkout", branch_name], cwd=repo_path)
 
 
 def create_branch(repo_path: str, branch_name: str) -> None:

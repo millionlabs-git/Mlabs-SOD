@@ -278,7 +278,7 @@ async def deploy(
     os.environ["FLY_API_TOKEN"] = config.fly_api_token
 
     await run_agent(
-        prompt=flyio_deploy_prompt(config.job_id, db_url),
+        prompt=flyio_deploy_prompt(config.job_id, db_url, config.resend_api_key),
         allowed_tools=["Bash", "Read", "Write", "Edit", "Grep", "Glob"],
         cwd=repo_path,
         model=config.model,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -12,6 +13,9 @@ from claude_agent_sdk import (
     ToolUseBlock,
     query,
 )
+
+if TYPE_CHECKING:
+    from src.status import StatusReporter
 
 
 @dataclass
@@ -35,6 +39,7 @@ async def run_agent(
     max_turns: int | None = None,
     context: str = "",
     agents: dict[str, AgentDefinition] | None = None,
+    reporter: "StatusReporter | None" = None,
 ) -> AgentResult:
     """Run a Claude agent query and return the final result.
 
@@ -53,6 +58,7 @@ async def run_agent(
         context: Project context injected at the top of the prompt.
         agents: Subagent definitions. The orchestrator agent invokes
             these via the Task tool based on each agent's description.
+        reporter: Optional StatusReporter to emit granular log events.
     """
     if context:
         prompt = f"## Project Context\n\n{context}\n\n---\n\n{prompt}"
@@ -77,9 +83,11 @@ async def run_agent(
     )
 
     result: ResultMessage | None = None
+    turn_count = 0
 
     async for message in query(prompt=prompt, options=options):
         if isinstance(message, AssistantMessage):
+            turn_count += 1
             for block in message.content:
                 if isinstance(block, TextBlock):
                     # Truncate long outputs for logging
@@ -87,8 +95,20 @@ async def run_agent(
                     if len(text) > 500:
                         text = text[:500] + "..."
                     print(f"[agent] {text}")
+                    if reporter:
+                        await reporter.report("log", {
+                            "type": "text",
+                            "text": text,
+                            "turn": turn_count,
+                        })
                 elif isinstance(block, ToolUseBlock):
                     print(f"[agent] Tool: {block.name}")
+                    if reporter:
+                        await reporter.report("log", {
+                            "type": "tool_use",
+                            "tool": block.name,
+                            "turn": turn_count,
+                        })
         elif isinstance(message, ResultMessage):
             result = message
             cost = f"${result.total_cost_usd:.4f}" if result.total_cost_usd else "unknown"

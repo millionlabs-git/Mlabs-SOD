@@ -88,12 +88,16 @@ Be thorough — this is attempt {attempt} of {max_retries}. Fix everything you c
 """
 
 
-def flyio_deploy_prompt(job_id: str, db_url: str | None) -> str:
+def flyio_deploy_prompt(job_id: str, db_url: str | None, resend_api_key: str = "") -> str:
     app_name = f"sod-{job_id[:8]}"
 
     db_secret_hint = ""
     if db_url:
         db_secret_hint = f'\nflyctl secrets set DATABASE_URL="{db_url}" -a {app_name}'
+
+    resend_hint = ""
+    if resend_api_key:
+        resend_hint = f'\nflyctl secrets set RESEND_API_KEY="{resend_api_key}" -a {app_name}'
 
     return f"""\
 Deploy this full-stack project to Fly.io as a single container.
@@ -173,7 +177,7 @@ flyctl apps create {app_name} --org mlabs-dev || true
 If the name is taken, try `{app_name}-app` or `{app_name}-live` and update fly.toml.
 
 Now set secrets — the app MUST have these before the first deploy or it will crash on startup:
-{db_secret_hint}
+{db_secret_hint}{resend_hint}
 
 Detect and set other required env vars:
 - Read `.env.example` or similar template files

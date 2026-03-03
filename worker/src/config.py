@@ -29,6 +29,7 @@ class Config(BaseModel):
     # Deploy credentials (optional — deploy phase skipped if not set)
     neon_api_key: str = ""
     fly_api_token: str = ""
+    resend_api_key: str = ""
 
     # Model
     model: str = "claude-sonnet-4-6"
@@ -65,6 +66,7 @@ class Config(BaseModel):
             github_app_private_key=private_key,
             neon_api_key=os.environ.get("NEON_API_KEY", ""),
             fly_api_token=os.environ.get("FLY_API_TOKEN", ""),
+            resend_api_key=os.environ.get("RESEND_API_KEY", ""),
             model=os.environ.get("MODEL", "claude-sonnet-4-6"),
             max_task_retries=int(os.environ.get("MAX_TASK_RETRIES", "3")),
             task_timeout=int(os.environ.get("TASK_TIMEOUT", "300")),
