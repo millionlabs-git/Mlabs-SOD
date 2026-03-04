@@ -396,12 +396,20 @@ If passed=false, send the missing items back to the **builder**.
 
 ### Phase 1: Architecture + Planning
 1. Send the PRD to the **architect** subagent
-   - It produces BOTH docs/ARCHITECTURE.md and docs/BUILD_PLAN.md
+   - It MUST produce ALL FOUR documents:
+     a. docs/ARCHITECTURE.md — technical architecture
+     b. docs/BUILD_PLAN.md — ordered build tasks
+     c. docs/USER_FLOWS.md — E2E test flows for every feature
+     d. docs/SEED_DATA.md — test data seeding manifest
 2. Run architecture verification: `python -m src.orchestrator.verifier architecture`
 3. If verification fails, provide the issues to **architect** and re-run
 4. Read docs/BUILD_PLAN.md — verify tasks have acceptance criteria
-5. Commit: `git add -A && git commit -m "docs: add architecture and build plan"`
-6. Push: `git push origin {branch_name}`
+5. **CRITICAL CHECK:** Verify docs/USER_FLOWS.md and docs/SEED_DATA.md exist.
+   If either is missing, send the **architect** back with:
+   "You are missing docs/USER_FLOWS.md and/or docs/SEED_DATA.md. These are MANDATORY.
+   Generate them now following the format instructions in your prompt."
+6. Commit: `git add -A && git commit -m "docs: add architecture and build plan"`
+7. Push: `git push origin {branch_name}`
 
 ### Phase 2: Scaffold
 1. Send to the **scaffolder** subagent
@@ -593,6 +601,50 @@ async def run_pipeline(
         progress.fail_phase("orchestrator", str(exc))
         progress.save()
         raise
+
+    # ── Ensure USER_FLOWS.md + SEED_DATA.md exist ────────────────────
+    # If the architect/orchestrator didn't generate these, run a
+    # dedicated agent to produce them so E2E testing can proceed.
+    user_flows_path = Path(repo_path) / "docs" / "USER_FLOWS.md"
+    seed_data_path = Path(repo_path) / "docs" / "SEED_DATA.md"
+    missing_docs = []
+    if not user_flows_path.exists():
+        missing_docs.append("docs/USER_FLOWS.md")
+    if not seed_data_path.exists():
+        missing_docs.append("docs/SEED_DATA.md")
+
+    if missing_docs:
+        print(f"[runner] Missing E2E docs: {', '.join(missing_docs)} — generating...")
+        await reporter.report("generating_test_docs", {"missing": missing_docs})
+        try:
+            arch_path = Path(repo_path) / "docs" / "ARCHITECTURE.md"
+            arch_content = arch_path.read_text() if arch_path.exists() else ""
+            prd_path = Path(repo_path) / "docs" / "PRD.md"
+            prd_for_docs = prd_path.read_text() if prd_path.exists() else prd_content
+
+            await run_agent(
+                prompt=(
+                    "You are an expert QA architect. Read the PRD and ARCHITECTURE.md below, "
+                    "then generate the missing test documents.\n\n"
+                    f"**Missing:** {', '.join(missing_docs)}\n\n"
+                    f"## PRD\n\n{prd_for_docs}\n\n"
+                    f"## Architecture\n\n{arch_content}\n\n"
+                    + (user_flows_instructions() if not user_flows_path.exists() else "")
+                    + (seed_data_instructions() if not seed_data_path.exists() else "")
+                    + "\n\nWrite the missing file(s) now. Do NOT skip any user flows."
+                ),
+                allowed_tools=["Read", "Write", "Edit", "Grep", "Glob"],
+                cwd=repo_path,
+                model=config.model,
+                max_turns=30,
+                reporter=reporter,
+            )
+            git_commit(repo_path, "docs: add USER_FLOWS.md and SEED_DATA.md for E2E testing")
+            if branch_name:
+                git_push(repo_path, branch_name)
+            print("[runner] Test docs generated successfully")
+        except Exception as exc:
+            print(f"[runner] Warning: failed to generate test docs: {exc}")
 
     # ── Post-orchestrator: handle deployment ──────────────────────────
     # Deployment is still handled by the existing deployer module because
