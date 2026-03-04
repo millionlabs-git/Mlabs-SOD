@@ -53,7 +53,7 @@ def _build_subagents(
             f"{architect_system}\n\n" if architect_system else ""
         ) + (
             "You are an expert software architect. Read the PRD provided "
-            "and produce TWO documents:\n\n"
+            "and produce FOUR documents (all four are MANDATORY):\n\n"
             "## Document 1: docs/ARCHITECTURE.md\n"
             "Decide on:\n"
             "- Tech stack (languages, frameworks, databases)\n"
@@ -78,7 +78,19 @@ def _build_subagents(
             "- **Route:** /path (if UI)\n"
             "- **Acceptance Criteria:**\n"
             "  - Specific, testable criterion\n\n"
-            "Write ARCHITECTURE.md first, then BUILD_PLAN.md, then USER_FLOWS.md, then SEED_DATA.md." + user_flows_instructions() + seed_data_instructions()
+            "## Document 3: docs/USER_FLOWS.md\n"
+            "E2E test flows for every user-facing feature. This file is used by "
+            "an automated tester agent to verify the deployed app works. "
+            "YOU MUST WRITE THIS FILE — without it, E2E testing is skipped "
+            "and the build is considered incomplete.\n\n"
+            "## Document 4: docs/SEED_DATA.md\n"
+            "Test data seeding manifest with accounts for every user type. "
+            "This file is used to seed the production database before E2E testing. "
+            "YOU MUST WRITE THIS FILE — without it, test data seeding is skipped.\n\n"
+            "Write them in order: ARCHITECTURE.md → BUILD_PLAN.md → USER_FLOWS.md → SEED_DATA.md.\n"
+            "Do NOT stop after BUILD_PLAN.md. All four documents are required.\n\n"
+            "Detailed format instructions for USER_FLOWS.md and SEED_DATA.md follow:\n"
+            + user_flows_instructions() + seed_data_instructions()
         ),
         tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
         model="opus",
