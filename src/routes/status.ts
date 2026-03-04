@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { config } from '../config';
-import { getJob, getJobEvents, addJobEvent, updateJobStatus } from '../db/queries';
+import { getJob, getJobEvents, addJobEvent, updateJobStatus, resetJobForRetry } from '../db/queries';
 import { pool } from '../db/client';
 import { forwardEventToMillionScopes } from '../webhook/notifier';
 
@@ -46,6 +46,36 @@ statusRouter.get('/jobs/:id/full', async (req: Request, res: Response) => {
 
   const events = await getJobEvents(id);
   res.json({ ...job, events });
+});
+
+// POST /jobs/:id/retry — retry a failed job from where it left off
+statusRouter.post('/jobs/:id/retry', async (req: Request, res: Response) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || authHeader !== `Bearer ${config.webhookSecret}`) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const job = await getJob(id);
+  if (!job) {
+    res.status(404).json({ error: 'Job not found' });
+    return;
+  }
+
+  if (job.status !== 'failed') {
+    res.status(400).json({ error: `Cannot retry job with status '${job.status}' — only failed jobs can be retried` });
+    return;
+  }
+
+  await resetJobForRetry(id);
+  await addJobEvent(id, 'job_retried', {
+    previous_status: job.status,
+    previous_build_status: job.build_status,
+    previous_execution_id: job.cloud_run_execution_id,
+  });
+
+  res.json({ job_id: id, status: 'pending', retried: true });
 });
 
 // POST /jobs/:id/events — worker status callback

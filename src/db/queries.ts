@@ -114,6 +114,13 @@ export async function updateBuildStatus(
   );
 }
 
+export async function resetJobForRetry(id: string): Promise<void> {
+  await pool.query(
+    `UPDATE jobs SET status = 'pending', cloud_run_execution_id = NULL, updated_at = now() WHERE id = $1`,
+    [id]
+  );
+}
+
 export async function markStaleJobsFailed(
   timeoutMinutes: number = 30
 ): Promise<number> {

@@ -596,6 +596,12 @@ async def run_pipeline(
             deploy_result = await deploy(
                 repo_path, config, reporter, branch_name
             )
+            # Save deploy info so retries can skip deployment and still have the URLs
+            if deploy_result and deploy_result.get("fly_app_name"):
+                progress.set_deploy_info(
+                    deploy_result["fly_app_name"],
+                    deploy_result.get("live_url", ""),
+                )
             progress.complete_phase("deployment")
             progress.save()
         except Exception as exc:
@@ -603,89 +609,97 @@ async def run_pipeline(
             progress.save()
             raise
 
-        # ── Post-deploy: Seed test data ──────────────────────────────
-        if deploy_result and deploy_result.get("neon_project_id"):
-            progress.start_phase("seeding")
-            try:
-                from src.pipeline.seeder import seed_test_data
-
-                creds_file = Path("/tmp/neon-credentials.json")
-                db_url = None
-                if creds_file.exists():
-                    db_url = json.loads(creds_file.read_text()).get("database_url")
-
-                if db_url:
-                    seed_ok = await seed_test_data(
-                        repo_path, db_url, config, reporter
-                    )
-                    if seed_ok:
-                        progress.complete_phase("seeding")
-                    else:
-                        progress.fail_phase("seeding", "Seeding returned False")
-                else:
-                    print("[runner] No DB URL available — skipping seeding")
-                    progress.skip_phase("seeding")
-
-                progress.save()
-            except Exception as exc:
-                progress.fail_phase("seeding", str(exc))
-                progress.save()
-                # Seeding failure is non-fatal — continue to E2E tests
-                print(f"[runner] Seeding failed (non-fatal): {exc}")
-
-        # ── Post-deploy: E2E testing loop ────────────────────────────
-        live_url = deploy_result.get("live_url") if deploy_result else None
-        fly_app_name = deploy_result.get("fly_app_name") if deploy_result else None
-
-        if live_url and fly_app_name:
-            progress.start_phase("e2e_testing")
-            try:
-                from src.pipeline.e2e_loop import run_e2e_loop
-                import os
-                import subprocess
-
-                # Set RESEND_API_KEY as fly secret for the app (non-fatal)
-                if config.resend_api_key:
-                    os.environ.setdefault("FLY_API_TOKEN", config.fly_api_token)
-                    try:
-                        subprocess.run(
-                            ["flyctl", "secrets", "set",
-                             f"RESEND_API_KEY={config.resend_api_key}",
-                             "-a", fly_app_name],
-                            capture_output=True, text=True, timeout=120,
-                        )
-                    except Exception as e:
-                        print(f"[runner] Warning: failed to set RESEND_API_KEY secret: {e}")
-
-                test_report = await run_e2e_loop(
-                    repo_path=repo_path,
-                    app_url=live_url,
-                    fly_app_name=fly_app_name,
-                    config=config,
-                    reporter=reporter,
-                    branch_name=branch_name,
-                    timeout_hours=5,
-                    cost_limit_usd=150.0,
-                )
-
-                # Commit test artifacts
-                git_commit(repo_path, "docs: add E2E test report and screenshots")
-                if branch_name:
-                    git_push(repo_path, branch_name)
-
-                if test_report["all_passed"]:
-                    progress.complete_phase("e2e_testing")
-                else:
-                    progress.fail_phase("e2e_testing",
-                        f"{test_report['failed']} flows still failing")
-
-                progress.save()
-            except Exception as exc:
-                progress.fail_phase("e2e_testing", str(exc))
-                progress.save()
-                print(f"[runner] E2E testing failed: {exc}")
-
     elif skip.get("deployment"):
-        progress.skip_phase("deployment")
+        # Deployment already done — load deploy info from PROGRESS.json
+        print("[runner] Deployment skipped (already completed)")
+        if progress.progress.deploy_app_name and progress.progress.deploy_url:
+            deploy_result = {
+                "live_url": progress.progress.deploy_url,
+                "fly_app_name": progress.progress.deploy_app_name,
+                "neon_project_id": None,
+            }
+            print(f"[runner] Loaded deploy info from PROGRESS.json: {deploy_result}")
+
+    # ── Post-deploy: Seed test data ──────────────────────────────
+    if deploy_result and deploy_result.get("neon_project_id") and not skip.get("seeding"):
+        progress.start_phase("seeding")
+        try:
+            from src.pipeline.seeder import seed_test_data
+
+            creds_file = Path("/tmp/neon-credentials.json")
+            db_url = None
+            if creds_file.exists():
+                db_url = json.loads(creds_file.read_text()).get("database_url")
+
+            if db_url:
+                seed_ok = await seed_test_data(
+                    repo_path, db_url, config, reporter
+                )
+                if seed_ok:
+                    progress.complete_phase("seeding")
+                else:
+                    progress.fail_phase("seeding", "Seeding returned False")
+            else:
+                print("[runner] No DB URL available — skipping seeding")
+                progress.skip_phase("seeding")
+
+            progress.save()
+        except Exception as exc:
+            progress.fail_phase("seeding", str(exc))
+            progress.save()
+            # Seeding failure is non-fatal — continue to E2E tests
+            print(f"[runner] Seeding failed (non-fatal): {exc}")
+
+    # ── Post-deploy: E2E testing loop ────────────────────────────
+    live_url = deploy_result.get("live_url") if deploy_result else None
+    fly_app_name = deploy_result.get("fly_app_name") if deploy_result else None
+
+    if live_url and fly_app_name and not skip.get("e2e_testing"):
+        progress.start_phase("e2e_testing")
+        try:
+            from src.pipeline.e2e_loop import run_e2e_loop
+            import os
+            import subprocess
+
+            # Set RESEND_API_KEY as fly secret for the app (non-fatal)
+            if config.resend_api_key:
+                os.environ.setdefault("FLY_API_TOKEN", config.fly_api_token)
+                try:
+                    subprocess.run(
+                        ["flyctl", "secrets", "set",
+                         f"RESEND_API_KEY={config.resend_api_key}",
+                         "-a", fly_app_name],
+                        capture_output=True, text=True, timeout=120,
+                    )
+                except Exception as e:
+                    print(f"[runner] Warning: failed to set RESEND_API_KEY secret: {e}")
+
+            test_report = await run_e2e_loop(
+                repo_path=repo_path,
+                app_url=live_url,
+                fly_app_name=fly_app_name,
+                config=config,
+                reporter=reporter,
+                branch_name=branch_name,
+                timeout_hours=5,
+                cost_limit_usd=150.0,
+            )
+
+            # Commit test artifacts
+            git_commit(repo_path, "docs: add E2E test report and screenshots")
+            if branch_name:
+                git_push(repo_path, branch_name)
+
+            if test_report["all_passed"]:
+                progress.complete_phase("e2e_testing")
+            else:
+                progress.fail_phase("e2e_testing",
+                    f"{test_report['failed']} flows still failing")
+
+            progress.save()
+        except Exception as exc:
+            progress.fail_phase("e2e_testing", str(exc))
+            progress.save()
+            print(f"[runner] E2E testing failed: {exc}")
 
     return deploy_result
