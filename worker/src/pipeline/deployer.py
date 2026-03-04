@@ -192,6 +192,7 @@ async def _ensure_build_ready(
             cwd=repo_path,
             model=config.model,
             max_turns=20,
+            agent_label=f"build-fix-{attempt + 1}",
         )
 
     # Final attempt after last fix
@@ -232,6 +233,7 @@ async def deploy(
             cwd=repo_path,
             model=config.model,
             max_turns=10,
+            agent_label="neon-provision",
         )
 
         # Read credentials saved by agent
@@ -256,6 +258,7 @@ async def deploy(
                 cwd=repo_path,
                 model=config.model,
                 max_turns=15,
+                agent_label="schema-migrate",
             )
     else:
         if _needs_db(repo_path):
@@ -283,6 +286,7 @@ async def deploy(
         cwd=repo_path,
         model=config.model,
         max_turns=25,
+        agent_label="fly-deploy",
     )
 
     # Read deployment info saved by agent
@@ -334,6 +338,7 @@ async def deploy(
                 cwd=repo_path,
                 model=config.model,
                 max_turns=10,
+                agent_label="deploy-verify",
             )
         except Exception as e:
             print(f"[deployer] Deployment verification error (non-fatal): {e}")

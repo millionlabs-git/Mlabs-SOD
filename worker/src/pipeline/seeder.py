@@ -41,6 +41,7 @@ async def seed_test_data(
             model=config.model,
             max_turns=20,
             reporter=reporter,
+            agent_label="seeder",
         )
         await reporter.report("seeding_complete")
         print("[seeder] Test data seeded successfully")

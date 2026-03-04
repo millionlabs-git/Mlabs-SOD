@@ -197,6 +197,28 @@ a{color:var(--accent2)}
 .bottom-bar .conn .indicator.disconnected{background:var(--red)}
 .bottom-bar .last-event{margin-left:auto}
 
+/* Agent cards */
+.agent-cards{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.agent-card{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px}
+.agent-card .agent-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.agent-card .agent-label{font-weight:700;color:var(--accent2)}
+.agent-card .agent-model{color:var(--dim)}
+.agent-card .agent-status{color:var(--dim);font-size:10px}
+.agent-card.running{border-color:var(--accent)}
+.agent-card.done{border-color:var(--green);opacity:0.7}
+.agent-card.error{border-color:var(--red)}
+
+/* E2E test grid */
+.e2e-grid{margin-bottom:12px}
+.e2e-grid h4{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin-bottom:8px}
+.e2e-cells{display:flex;flex-wrap:wrap;gap:3px}
+.e2e-cell{width:14px;height:14px;border-radius:2px;background:var(--border);cursor:default;position:relative}
+.e2e-cell.pass{background:var(--green)}
+.e2e-cell.fail{background:var(--red)}
+.e2e-cell.blocked{background:var(--yellow)}
+.e2e-cell[title]:hover::after{content:attr(title);position:absolute;bottom:18px;left:50%;transform:translateX(-50%);background:var(--surface);border:1px solid var(--border);padding:2px 6px;border-radius:3px;font-size:10px;white-space:nowrap;z-index:10;color:var(--text)}
+.e2e-summary{font-size:11px;color:var(--dim);margin-top:6px}
+
 /* Auth overlay */
 .auth-overlay{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:100}
 .auth-box{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:32px;max-width:400px;width:100%}
@@ -246,6 +268,8 @@ a{color:var(--accent2)}
 
     <div class="stats">
       <h3>Stats</h3>
+      <div class="agent-cards" id="agentCards"></div>
+      <div class="e2e-grid" id="e2eGrid" style="display:none"><h4>E2E Tests</h4><div class="e2e-cells" id="e2eCells"></div><div class="e2e-summary" id="e2eSummary"></div></div>
       <div class="stat"><div class="label">Events</div><div class="value" id="statEvents">0</div></div>
       <div class="stat"><div class="label">Current Phase</div><div class="value sm" id="statPhase">—</div></div>
       <div class="stat"><div class="label">Cost</div><div class="value sm" id="statCost">—</div></div>
@@ -277,6 +301,9 @@ let completedTasks = 0;
 let verifyPass = 0;
 let verifyFail = 0;
 let currentPhase = 'init';
+let activeAgents = {};
+let totalCostUsd = 0;
+let e2eFlowResults = {};
 
 const PHASE_MAP = {
   worker_started:'init', worker_launched:'init',
@@ -292,6 +319,10 @@ const PHASE_MAP = {
   e2e_loop_started:'test', e2e_loop_complete:'test',
   e2e_fix_started:'fix', e2e_fix_failed:'fix',
   e2e_redeploy_started:'fix', e2e_redeploy_complete:'fix', e2e_redeploy_failed:'fix',
+  agent_started:'build', agent_progress:'build', agent_completed:'build', agent_error:'build',
+  e2e_batch_started:'test', e2e_batch_completed:'test', e2e_batch_failed:'test',
+  e2e_flow_passed:'test', e2e_flow_failed:'test', e2e_flow_blocked:'test',
+  generating_test_docs:'build',
   completed:'done', build_complete:'done',
   failed:'error', build_failed:'error',
 };
@@ -300,6 +331,11 @@ const VERIFY_EVENTS = ['readiness_check','readiness_passed','readiness_failed','
 
 function getEventCategory(name, detail) {
   if (['failed','build_failed','error'].includes(name)) return 'error';
+  if (['agent_started','agent_progress','agent_completed'].includes(name)) return 'build';
+  if (name === 'agent_error') return 'error';
+  if (['e2e_batch_started','e2e_batch_completed','e2e_batch_failed'].includes(name)) return 'verify';
+  if (['e2e_flow_passed'].includes(name)) return 'verify';
+  if (['e2e_flow_failed','e2e_flow_blocked'].includes(name)) return 'error';
   if (VERIFY_EVENTS.includes(name)) return 'verify';
   if (['deployed','completed','build_complete'].includes(name)) return 'deploy';
   if (['seeding_started','seeding_complete','seeding_skipped','seeding_failed'].includes(name)) return 'phase';
@@ -350,6 +386,17 @@ function summarize(evt) {
     case 'e2e_redeploy_started': return 'Redeploying (iteration ' + (d.iteration || '?') + ')';
     case 'e2e_redeploy_complete': return 'Redeploy complete (iteration ' + (d.iteration || '?') + ')';
     case 'e2e_redeploy_failed': return 'Redeploy failed (iteration ' + (d.iteration || '?') + ')';
+    case 'agent_started': return (d.agent_label || 'agent') + ' started (' + (d.model || '?') + ', max ' + (d.max_turns || '?') + ' turns)';
+    case 'agent_progress': return (d.agent_label || 'agent') + ' turn ' + (d.turn || '?') + ' — tools: ' + (d.tools_used?.join(', ') || 'none');
+    case 'agent_completed': return (d.agent_label || 'agent') + ' done — ' + (d.turns || '?') + ' turns, $' + (d.cost_usd?.toFixed(2) || '?') + ', ' + ((d.duration_ms/1000)?.toFixed(0) || '?') + 's';
+    case 'agent_error': return (d.agent_label || 'agent') + ' error: ' + (d.error || '?');
+    case 'e2e_batch_started': return 'E2E batch ' + ((d.batch_idx ?? 0) + 1) + '/' + (d.total_batches || '?') + ' started (' + (d.flow_count || '?') + ' flows)';
+    case 'e2e_batch_completed': return 'E2E batch ' + ((d.batch_idx ?? 0) + 1) + ' done — ' + (d.passed || 0) + ' pass, ' + (d.failed || 0) + ' fail, ' + (d.blocked || 0) + ' blocked';
+    case 'e2e_batch_failed': return 'E2E batch ' + ((d.batch_idx ?? 0) + 1) + ' error: ' + (d.error || '?');
+    case 'e2e_flow_passed': return 'PASS: ' + (d.flow_id || '?');
+    case 'e2e_flow_failed': return 'FAIL: ' + (d.flow_id || '?') + (d.error ? ' — ' + d.error : '');
+    case 'e2e_flow_blocked': return 'BLOCKED: ' + (d.flow_id || '?') + (d.reason ? ' — ' + d.reason : '');
+    case 'generating_test_docs': return 'Generating missing test docs: ' + (d.missing?.join(', ') || '?');
     case 'pr_created': return 'PR created' + (d.pr_url ? ' — ' + d.pr_url : '');
     case 'completed': case 'build_complete': return 'Pipeline completed successfully';
     case 'failed': case 'build_failed': return 'Pipeline failed' + (d.message ? ': ' + d.message : '');
@@ -380,7 +427,7 @@ function formatElapsed(ms) {
 
 function updatePhases(phase) {
   currentPhase = phase;
-  const order = ['init','clone','plan','build','deploy','done'];
+  const order = ['init','clone','plan','build','deploy','seed','test','fix','done'];
   const idx = order.indexOf(phase);
   document.querySelectorAll('.phase').forEach(el => {
     const p = el.dataset.phase;
@@ -398,7 +445,7 @@ function updatePhases(phase) {
   document.getElementById('statPhase').textContent = phase;
   const badge = document.getElementById('phaseBadge');
   badge.textContent = phase;
-  const colors = {init:'var(--dim)',clone:'var(--blue)',plan:'var(--cyan)',build:'var(--accent)',deploy:'var(--yellow)',done:'var(--green)',error:'var(--red)'};
+  const colors = {init:'var(--dim)',clone:'var(--blue)',plan:'var(--cyan)',build:'var(--accent)',deploy:'var(--yellow)',seed:'var(--cyan)',test:'var(--green)',fix:'var(--yellow)',done:'var(--green)',error:'var(--red)'};
   badge.style.background = colors[phase] || 'var(--dim)';
 }
 
@@ -414,9 +461,36 @@ function addEvent(evt) {
   if (evt.event === 'task_started' && evt.detail?.task_number > completedTasks) completedTasks = evt.detail.task_number - 1;
   if (evt.event === 'readiness_passed') verifyPass++;
   if (evt.event === 'readiness_failed') verifyFail++;
-  if (evt.event === 'orchestrator_complete') {
-    if (evt.detail?.cost_usd) document.getElementById('statCost').textContent = '$' + evt.detail.cost_usd.toFixed(2);
-    if (evt.detail?.turns) document.getElementById('statTurns').textContent = evt.detail.turns;
+  // Agent card tracking
+  if (evt.event === 'agent_started') {
+    const label = evt.detail?.agent_label || 'agent';
+    activeAgents[label] = {model: evt.detail?.model, turns: 0, status: 'running'};
+    renderAgentCards();
+  }
+  if (evt.event === 'agent_progress') {
+    const label = evt.detail?.agent_label || 'agent';
+    if (activeAgents[label]) { activeAgents[label].turns = evt.detail?.turn || 0; activeAgents[label].tools = evt.detail?.tools_used; activeAgents[label].text = evt.detail?.last_text; }
+    renderAgentCards();
+  }
+  if (evt.event === 'agent_completed') {
+    const label = evt.detail?.agent_label || 'agent';
+    if (activeAgents[label]) { activeAgents[label].status = 'done'; activeAgents[label].turns = evt.detail?.turns || 0; activeAgents[label].cost = evt.detail?.cost_usd; activeAgents[label].duration = evt.detail?.duration_ms; }
+    if (evt.detail?.cost_usd) totalCostUsd += evt.detail.cost_usd;
+    document.getElementById('statCost').textContent = '$' + totalCostUsd.toFixed(2);
+    renderAgentCards();
+  }
+  if (evt.event === 'agent_error') {
+    const label = evt.detail?.agent_label || 'agent';
+    if (activeAgents[label]) { activeAgents[label].status = 'error'; activeAgents[label].error = evt.detail?.error; }
+    renderAgentCards();
+  }
+
+  // E2E flow tracking
+  if (['e2e_flow_passed','e2e_flow_failed','e2e_flow_blocked'].includes(evt.event)) {
+    const fid = evt.detail?.flow_id || '?';
+    const status = evt.event === 'e2e_flow_passed' ? 'pass' : evt.event === 'e2e_flow_failed' ? 'fail' : 'blocked';
+    e2eFlowResults[fid] = {status, error: evt.detail?.error || evt.detail?.reason || ''};
+    renderE2eGrid();
   }
 
   // Update DOM
@@ -444,6 +518,40 @@ function addEvent(evt) {
   list.scrollTop = list.scrollHeight;
 
   if (!startTime) startTime = new Date(evt.created_at);
+}
+
+function renderAgentCards() {
+  const container = document.getElementById('agentCards');
+  container.innerHTML = '';
+  for (const [label, info] of Object.entries(activeAgents)) {
+    const card = document.createElement('div');
+    card.className = 'agent-card ' + info.status;
+    let statusText = '';
+    if (info.status === 'running') statusText = 'Turn ' + (info.turns || 0) + (info.tools ? ' — ' + info.tools.slice(-3).join(', ') : '');
+    else if (info.status === 'done') statusText = info.turns + ' turns, $' + (info.cost?.toFixed(2) || '?') + ', ' + ((info.duration/1000)?.toFixed(0) || '?') + 's';
+    else if (info.status === 'error') statusText = 'Error: ' + (info.error?.slice(0, 80) || '?');
+    card.innerHTML = '<div class="agent-header"><span class="agent-label">' + label + '</span><span class="agent-model">' + (info.model || '') + '</span></div><div class="agent-status">' + statusText + '</div>';
+    container.appendChild(card);
+  }
+}
+
+function renderE2eGrid() {
+  const grid = document.getElementById('e2eGrid');
+  const cells = document.getElementById('e2eCells');
+  const summary = document.getElementById('e2eSummary');
+  grid.style.display = 'block';
+  cells.innerHTML = '';
+  let pass = 0, fail = 0, blocked = 0;
+  for (const [fid, info] of Object.entries(e2eFlowResults)) {
+    const cell = document.createElement('div');
+    cell.className = 'e2e-cell ' + info.status;
+    cell.title = fid + (info.error ? ': ' + info.error : '');
+    cells.appendChild(cell);
+    if (info.status === 'pass') pass++;
+    else if (info.status === 'fail') fail++;
+    else blocked++;
+  }
+  summary.textContent = pass + ' pass / ' + fail + ' fail / ' + blocked + ' blocked';
 }
 
 function connect() {

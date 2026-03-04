@@ -258,6 +258,126 @@ Failed at step N: <action> <selector>
 """
 
 
+def e2e_batch_tester_prompt(
+    batch_flows_content: str,
+    seed_data_content: str,
+    app_url: str,
+    vp_script: str,
+    resend_api_key: str,
+    screenshots_dir: str,
+    batch_idx: int,
+    total_batches: int,
+    prior_results: dict[str, str] | None = None,
+) -> str:
+    """Prompt for the E2E tester agent scoped to a single batch of flows."""
+    prior_results_section = ""
+    if prior_results:
+        lines = [
+            f"  - {flow_id}: {status}"
+            for flow_id, status in prior_results.items()
+        ]
+        prior_results_section = f"""
+## Prior Batch Results
+
+The following flows were executed in earlier batches. Use this to resolve dependencies:
+
+{chr(10).join(lines)}
+
+If a flow in this batch depends on a flow that FAILED or was BLOCKED in a prior batch,
+mark it BLOCKED without attempting it.
+"""
+
+    return f"""\
+You are an E2E tester. You are running batch {batch_idx + 1} of {total_batches}.
+Execute ONLY the user flows listed below against the live app using Visual Playwright.
+
+App URL: {app_url}
+VP Script: {vp_script}
+Screenshots Dir: {screenshots_dir}
+Resend API Key: {resend_api_key}
+{prior_results_section}
+## Flows in This Batch
+
+{batch_flows_content}
+
+## Test Credentials (from SEED_DATA.md)
+
+{seed_data_content}
+
+## Execution Rules
+
+1. Run flows in dependency order (check `depends_on` for each flow)
+2. For each flow, execute every step sequentially using Visual Playwright:
+   - `goto`: `node {{vp_script}} goto "{{app_url}}{{url}}" --screenshot {{screenshots_dir}}/{{name}}.png`
+   - `fill`: `node {{vp_script}} fill "{{selector}}" "{{value}}"`
+   - `click`: `node {{vp_script}} click "{{selector}}"`
+   - `wait`: Check for the expected condition by taking a screenshot and evaluating
+   - `screenshot`: `node {{vp_script}} screenshot {{screenshots_dir}}/{{name}}.png`
+   - `select`: `node {{vp_script}} select "{{selector}}" "{{value}}"`
+   - `check_email`: Use curl to call Resend API:
+     ```bash
+     curl -s https://api.resend.com/emails \\
+       -H "Authorization: Bearer {{resend_api_key}}" \\
+       -H "Content-Type: application/json"
+     ```
+     Poll every 2 seconds up to timeout. Find email matching `to` and `subject_contains`.
+     Extract the URL from the email HTML body for the `extract` variable.
+   - `assert`: Verify by taking a screenshot and checking the page content
+
+3. Selector resolution: each step has comma-separated selectors. Try each left-to-right.
+   Use `node {{vp_script}} attrs "{{selector}}"` to check if an element exists.
+   If none match, FAIL the step and list what IS visible on the page.
+
+4. On step failure:
+   - Take a screenshot: `node {{vp_script}} screenshot {{screenshots_dir}}/{{flow_id}}-fail.png`
+   - Record the error details and page state
+   - Read browser console: `node {{vp_script}} eval "JSON.stringify(window.__console_errors || [])"`
+   - Skip remaining steps in this flow (mark as BLOCKED)
+   - Continue to the next flow — NEVER stop on failure
+
+5. If a flow's dependency failed (in this batch or a prior batch), mark it BLOCKED without attempting it.
+   Note if seeded data could make it independent.
+
+6. After ALL flows in this batch complete, write docs/TEST_REPORT_BATCH_{batch_idx}.md:
+
+```markdown
+# E2E Test Report — Batch {batch_idx + 1} of {total_batches}
+
+## Summary
+batch: {batch_idx + 1}/{total_batches}
+total_flows: <N>
+passed: <N>
+failed: <N>
+blocked: <N>
+run_time: <duration>
+app_url: {app_url}
+
+## Results
+
+### PASS: <flow-id> (<duration>)
+All N steps passed.
+
+### FAIL: <flow-id> (<duration>)
+Failed at step N: <action> <selector>
+  error: <what went wrong>
+  selectors_tried: <list>
+  page_state: <what's actually on the page>
+  screenshot: <path>
+  console_errors: <any JS errors>
+  diagnosis: <your analysis of the likely root cause — which file/component is probably broken>
+
+### BLOCKED: <flow-id>
+  reason: <which dependency failed, and whether it was in this batch or a prior batch>
+  recommendation: <could this be made independent?>
+
+## Failed Flow Details (for fixer agent)
+- <flow-id>: <one-line diagnosis with likely file/component>
+```
+
+7. Close VP sessions when done: `node {{vp_script}} close`
+"""
+
+
 def e2e_fix_prompt(test_report_content: str, iteration: int) -> str:
     """Prompt for the fixer agent to resolve E2E test failures."""
     return f"""\

@@ -584,6 +584,7 @@ async def run_pipeline(
             model="claude-opus-4-6",  # Orchestrator uses Opus for coordination judgment
             max_turns=200,
             reporter=reporter,
+            agent_label="orchestrator",
         )
 
         progress.record_agent_result(
@@ -638,6 +639,7 @@ async def run_pipeline(
                 model=config.model,
                 max_turns=30,
                 reporter=reporter,
+                agent_label="test-doc-gen",
             )
             git_commit(repo_path, "docs: add USER_FLOWS.md and SEED_DATA.md for E2E testing")
             if branch_name:

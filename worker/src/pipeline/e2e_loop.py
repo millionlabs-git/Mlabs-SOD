@@ -91,6 +91,7 @@ async def run_e2e_loop(
                 model=config.model,
                 max_turns=30,
                 reporter=reporter,
+                agent_label=f"e2e-fixer-{iteration}",
             )
             total_cost += result.cost_usd
         except Exception as e:

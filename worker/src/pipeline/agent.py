@@ -1,6 +1,7 @@
 """Wrapper around the Claude Agent SDK for running agent queries and agent teams."""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,7 @@ async def run_agent(
     context: str = "",
     agents: dict[str, AgentDefinition] | None = None,
     reporter: "StatusReporter | None" = None,
+    agent_label: str = "agent",
 ) -> AgentResult:
     """Run a Claude agent query and return the final result.
 
@@ -59,6 +61,7 @@ async def run_agent(
         agents: Subagent definitions. The orchestrator agent invokes
             these via the Task tool based on each agent's description.
         reporter: Optional StatusReporter to emit granular log events.
+        agent_label: Descriptive label for this agent run (used in events).
     """
     if context:
         prompt = f"## Project Context\n\n{context}\n\n---\n\n{prompt}"
@@ -82,47 +85,86 @@ async def run_agent(
         agents=agents if agents else None,
     )
 
+    # Emit agent_started event
+    if reporter:
+        await reporter.report("agent_started", {
+            "agent_label": agent_label,
+            "model": model,
+            "max_turns": max_turns,
+        })
+
+    start_ms = time.monotonic_ns() // 1_000_000
     result: ResultMessage | None = None
     turn_count = 0
+    tools_since_last_progress: list[str] = []
+    last_text = ""
+    progress_interval = 5
 
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            turn_count += 1
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    # Truncate long outputs for logging
-                    text = block.text
-                    if len(text) > 500:
-                        text = text[:500] + "..."
-                    print(f"[agent] {text}")
-                    if reporter:
-                        await reporter.report("log", {
-                            "type": "text",
-                            "text": text,
-                            "turn": turn_count,
-                        })
-                elif isinstance(block, ToolUseBlock):
-                    print(f"[agent] Tool: {block.name}")
-                    if reporter:
-                        await reporter.report("log", {
-                            "type": "tool_use",
-                            "tool": block.name,
-                            "turn": turn_count,
-                        })
-        elif isinstance(message, ResultMessage):
-            result = message
-            cost = f"${result.total_cost_usd:.4f}" if result.total_cost_usd else "unknown"
-            print(
-                f"[agent] Done — turns: {result.num_turns}, "
-                f"cost: {cost}, "
-                f"duration: {result.duration_ms}ms"
-            )
+    try:
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                turn_count += 1
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        text = block.text
+                        if len(text) > 500:
+                            text = text[:500] + "..."
+                        print(f"[{agent_label}] {text}")
+                        last_text = text
+                    elif isinstance(block, ToolUseBlock):
+                        print(f"[{agent_label}] Tool: {block.name}")
+                        tools_since_last_progress.append(block.name)
+
+                # Emit progress every N turns
+                if reporter and turn_count % progress_interval == 0:
+                    await reporter.report("agent_progress", {
+                        "agent_label": agent_label,
+                        "turn": turn_count,
+                        "tools_used": tools_since_last_progress[:],
+                        "last_text": last_text[:200] if last_text else "",
+                    })
+                    tools_since_last_progress.clear()
+
+            elif isinstance(message, ResultMessage):
+                result = message
+                cost = f"${result.total_cost_usd:.4f}" if result.total_cost_usd else "unknown"
+                print(
+                    f"[{agent_label}] Done — turns: {result.num_turns}, "
+                    f"cost: {cost}, "
+                    f"duration: {result.duration_ms}ms"
+                )
+    except Exception as exc:
+        elapsed = (time.monotonic_ns() // 1_000_000) - start_ms
+        if reporter:
+            await reporter.report("agent_error", {
+                "agent_label": agent_label,
+                "error": str(exc)[:500],
+                "turn": turn_count,
+                "duration_ms": elapsed,
+            })
+        raise
 
     if result is None:
         raise RuntimeError("Agent query completed without a ResultMessage")
 
     if result.is_error:
+        if reporter:
+            await reporter.report("agent_error", {
+                "agent_label": agent_label,
+                "error": str(result)[:500],
+                "turn": turn_count,
+                "duration_ms": result.duration_ms or 0,
+            })
         raise RuntimeError(f"Agent query failed: {result}")
+
+    # Emit agent_completed event
+    if reporter:
+        await reporter.report("agent_completed", {
+            "agent_label": agent_label,
+            "turns": result.num_turns or 0,
+            "cost_usd": result.total_cost_usd or 0.0,
+            "duration_ms": result.duration_ms or 0,
+        })
 
     return AgentResult(
         cost_usd=result.total_cost_usd or 0.0,
