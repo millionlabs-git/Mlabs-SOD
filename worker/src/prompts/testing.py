@@ -305,6 +305,32 @@ Resend API Key: {resend_api_key}
 
 {seed_data_content}
 
+## CRITICAL: Write the Report File FIRST
+
+Before running any tests, create the report file with a skeleton:
+
+```bash
+cat > docs/TEST_REPORT_BATCH_{batch_idx}.md << 'REPORT_EOF'
+# E2E Test Report — Batch {batch_idx + 1} of {total_batches}
+
+## Summary
+batch: {batch_idx + 1}/{total_batches}
+total_flows: 0
+passed: 0
+failed: 0
+blocked: 0
+app_url: {app_url}
+
+## Results
+
+## Failed Flow Details (for fixer agent)
+REPORT_EOF
+```
+
+After EACH flow completes (pass, fail, or blocked), IMMEDIATELY append the result to this
+file using `>>` and update the summary counts. Do NOT wait until the end — you may run out
+of turns. The results MUST be in the file even if you don't finish all flows.
+
 ## Execution Rules
 
 1. Run flows in dependency order (check `depends_on` for each flow)
@@ -344,41 +370,32 @@ Resend API Key: {resend_api_key}
 5. If a flow's dependency failed (in this batch or a prior batch), mark it BLOCKED without attempting it.
    Note if seeded data could make it independent.
 
-6. After ALL flows in this batch complete, write docs/TEST_REPORT_BATCH_{batch_idx}.md:
+6. Writing results: After EACH flow, append to docs/TEST_REPORT_BATCH_{batch_idx}.md using this format:
 
-```markdown
-# E2E Test Report — Batch {batch_idx + 1} of {total_batches}
+   For a passing flow, append:
+   ```
+   ### PASS: <flow-id>
+   All N steps passed.
+   ```
 
-## Summary
-batch: {batch_idx + 1}/{total_batches}
-total_flows: <N>
-passed: <N>
-failed: <N>
-blocked: <N>
-run_time: <duration>
-app_url: {app_url}
+   For a failing flow, append:
+   ```
+   ### FAIL: <flow-id>
+   Failed at step N: <action> <selector>
+     error: <what went wrong>
+     page_state: <what's visible>
+     screenshot: <path>
+     diagnosis: <likely root cause>
+   ```
 
-## Results
+   For a blocked flow, append:
+   ```
+   ### BLOCKED: <flow-id>
+     reason: <which dependency failed>
+   ```
 
-### PASS: <flow-id> (<duration>)
-All N steps passed.
-
-### FAIL: <flow-id> (<duration>)
-Failed at step N: <action> <selector>
-  error: <what went wrong>
-  selectors_tried: <list>
-  page_state: <what's actually on the page>
-  screenshot: <path>
-  console_errors: <any JS errors>
-  diagnosis: <your analysis of the likely root cause — which file/component is probably broken>
-
-### BLOCKED: <flow-id>
-  reason: <which dependency failed, and whether it was in this batch or a prior batch>
-  recommendation: <could this be made independent?>
-
-## Failed Flow Details (for fixer agent)
-- <flow-id>: <one-line diagnosis with likely file/component>
-```
+   Then update the Summary section counts (total_flows, passed, failed, blocked) to reflect
+   the current running totals.
 
 7. Close VP sessions when done: `node {{vp_script}} close`
 """
