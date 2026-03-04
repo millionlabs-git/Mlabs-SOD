@@ -169,7 +169,8 @@ def _parse_prose_flows(content: str) -> list[FlowSpec]:
 def _slugify(name: str) -> str:
     """Convert a flow name to a slug ID: 'Add a Building (happy path)' → 'add-a-building-happy-path'."""
     slug = name.lower()
-    slug = re.sub(r"[^a-z0-9\s-]", "", slug)  # remove special chars
+    slug = re.sub(r"[/:\\|]", " ", slug)  # common separators → space
+    slug = re.sub(r"[^a-z0-9\s-]", "", slug)  # remove remaining special chars
     slug = re.sub(r"[\s]+", "-", slug.strip())  # spaces to hyphens
     slug = re.sub(r"-+", "-", slug)  # collapse multiple hyphens
     return slug[:60]  # cap length
@@ -249,8 +250,18 @@ def batch_flows(
 # Batch report parsing + aggregation
 # ---------------------------------------------------------------------------
 
-def _parse_batch_report(repo_path: str, batch_idx: int) -> dict:
-    """Parse a single batch report file."""
+def _parse_batch_report(
+    repo_path: str,
+    batch_idx: int,
+    known_flow_ids: list[str] | None = None,
+) -> dict:
+    """Parse a single batch report file.
+
+    Uses header counting (``### PASS/FAIL/BLOCKED``) as the primary source
+    of truth — agents rarely update the summary section reliably.
+    When *known_flow_ids* is provided, fuzzy-matches the text after the
+    status keyword back to the canonical slugified IDs.
+    """
     report_path = Path(repo_path) / "docs" / f"TEST_REPORT_BATCH_{batch_idx}.md"
     if not report_path.exists():
         return {
@@ -260,14 +271,30 @@ def _parse_batch_report(repo_path: str, batch_idx: int) -> dict:
         }
 
     raw = report_path.read_text()
-    total = _extract_int(raw, r"total_flows:\s*(\d+)")
-    passed = _extract_int(raw, r"passed:\s*(\d+)")
-    failed = _extract_int(raw, r"failed:\s*(\d+)")
-    blocked = _extract_int(raw, r"blocked:\s*(\d+)")
 
-    failed_flows = re.findall(r"###\s+FAIL:\s+([\w-]+)", raw)
-    blocked_flows = re.findall(r"###\s+BLOCKED:\s+([\w-]+)", raw)
-    passed_flows = re.findall(r"###\s+PASS:\s+([\w-]+)", raw)
+    # Primary: count by scanning ### headers (agents don't reliably update summary)
+    passed_entries = re.findall(r"^###\s+PASS:\s*(.+)$", raw, re.MULTILINE)
+    failed_entries = re.findall(r"^###\s+FAIL(?:ED)?:\s*(.+)$", raw, re.MULTILINE)
+    blocked_entries = re.findall(r"^###\s+BLOCKED:\s*(.+)$", raw, re.MULTILINE)
+
+    header_total = len(passed_entries) + len(failed_entries) + len(blocked_entries)
+
+    if header_total > 0:
+        passed = len(passed_entries)
+        failed = len(failed_entries)
+        blocked = len(blocked_entries)
+        total = header_total
+    else:
+        # Fallback: trust summary counts only when no headers found
+        total = _extract_int(raw, r"total_flows:\s*(\d+)")
+        passed = _extract_int(raw, r"passed:\s*(\d+)")
+        failed = _extract_int(raw, r"failed:\s*(\d+)")
+        blocked = _extract_int(raw, r"blocked:\s*(\d+)")
+
+    # Match report entries to known flow IDs
+    passed_flows = _match_flow_ids(passed_entries, known_flow_ids)
+    failed_flows = _match_flow_ids(failed_entries, known_flow_ids)
+    blocked_flows = _match_flow_ids(blocked_entries, known_flow_ids)
 
     return {
         "total": total, "passed": passed, "failed": failed, "blocked": blocked,
@@ -276,11 +303,78 @@ def _parse_batch_report(repo_path: str, batch_idx: int) -> dict:
     }
 
 
+def _match_flow_ids(
+    entries: list[str],
+    known_ids: list[str] | None,
+) -> list[str]:
+    """Best-effort match of report header text to canonical flow IDs.
+
+    Tries: exact match → slugified match → substring containment.
+    Falls back to slugified entry if no known IDs are provided.
+    """
+    if not entries:
+        return []
+
+    def _clean(text: str) -> str:
+        """Strip trailing timing info like (2.1s) and extra whitespace."""
+        return re.sub(r"\s*\(\d+\.?\d*s?\)\s*$", "", text.strip())
+
+    if not known_ids:
+        return [_slugify(_clean(e)) for e in entries if e.strip()]
+
+    known_set = set(known_ids)
+    matched: list[str] = []
+    for entry in entries:
+        entry_clean = _clean(entry)
+        if not entry_clean:
+            continue
+
+        # 1. Exact match (agent wrote the slug ID)
+        if entry_clean in known_set:
+            matched.append(entry_clean)
+            continue
+
+        # 2. Slugify the entry text and check
+        slugified = _slugify(entry_clean)
+        if slugified in known_set:
+            matched.append(slugified)
+            continue
+
+        # 3. Substring containment (e.g. "signup-email" matches "signup-email-password")
+        found = False
+        for kid in known_ids:
+            if kid in slugified or slugified in kid:
+                matched.append(kid)
+                found = True
+                break
+
+        # 4. Strip leading numbers/punctuation and re-slugify
+        #    Handles "4.15 — Manage Duplicates: Merge" → "manage-duplicates-merge"
+        if not found:
+            stripped = re.sub(r"^[\d.]+\s*[-—–]?\s*", "", entry_clean)
+            stripped_slug = _slugify(stripped)
+            if stripped_slug in known_set:
+                matched.append(stripped_slug)
+                found = True
+            else:
+                for kid in known_ids:
+                    if kid in stripped_slug or stripped_slug in kid:
+                        matched.append(kid)
+                        found = True
+                        break
+
+        if not found:
+            matched.append(slugified or entry_clean)
+
+    return matched
+
+
 def _aggregate_reports(repo_path: str, batch_count: int) -> dict:
     """Merge all batch reports into a single TEST_REPORT.md and return summary."""
     total = passed = failed = blocked = 0
     all_failed: list[str] = []
     all_blocked: list[str] = []
+    all_passed_flows: list[str] = []
     sections: list[str] = []
 
     for i in range(batch_count):
@@ -291,6 +385,7 @@ def _aggregate_reports(repo_path: str, batch_count: int) -> dict:
         blocked += report["blocked"]
         all_failed.extend(report["failed_flows"])
         all_blocked.extend(report["blocked_flows"])
+        all_passed_flows.extend(report.get("passed_flows", []))
         if report["raw"]:
             sections.append(f"<!-- Batch {i} -->\n{report['raw']}")
 
@@ -324,7 +419,11 @@ blocked: {blocked}
 
 
 def parse_test_report(repo_path: str) -> dict:
-    """Parse docs/TEST_REPORT.md and return structured results."""
+    """Parse docs/TEST_REPORT.md and return structured results.
+
+    Uses header counting as primary source of truth, with summary
+    section as fallback.
+    """
     report_path = Path(repo_path) / "docs" / "TEST_REPORT.md"
     if not report_path.exists():
         return {
@@ -334,12 +433,27 @@ def parse_test_report(repo_path: str) -> dict:
         }
 
     raw = report_path.read_text()
-    total = _extract_int(raw, r"total_flows:\s*(\d+)")
-    passed = _extract_int(raw, r"passed:\s*(\d+)")
-    failed = _extract_int(raw, r"failed:\s*(\d+)")
-    blocked = _extract_int(raw, r"blocked:\s*(\d+)")
-    failed_flows = re.findall(r"###\s+FAIL:\s+([\w-]+)", raw)
-    blocked_flows = re.findall(r"###\s+BLOCKED:\s+([\w-]+)", raw)
+
+    # Primary: count headers
+    passed_entries = re.findall(r"^###\s+PASS:\s*(.+)$", raw, re.MULTILINE)
+    failed_entries = re.findall(r"^###\s+FAIL(?:ED)?:\s*(.+)$", raw, re.MULTILINE)
+    blocked_entries = re.findall(r"^###\s+BLOCKED:\s*(.+)$", raw, re.MULTILINE)
+
+    header_total = len(passed_entries) + len(failed_entries) + len(blocked_entries)
+
+    if header_total > 0:
+        passed = len(passed_entries)
+        failed = len(failed_entries)
+        blocked = len(blocked_entries)
+        total = header_total
+    else:
+        total = _extract_int(raw, r"total_flows:\s*(\d+)")
+        passed = _extract_int(raw, r"passed:\s*(\d+)")
+        failed = _extract_int(raw, r"failed:\s*(\d+)")
+        blocked = _extract_int(raw, r"blocked:\s*(\d+)")
+
+    failed_flows = _match_flow_ids(failed_entries, None)
+    blocked_flows = _match_flow_ids(blocked_entries, None)
 
     return {
         "total": total, "passed": passed, "failed": failed, "blocked": blocked,
@@ -555,7 +669,10 @@ All {total_flow_count} flows marked BLOCKED.
             total_cost += result.cost_usd
 
             # Parse batch report and update prior_results
-            batch_report = _parse_batch_report(repo_path, batch_idx)
+            batch_report = _parse_batch_report(
+                repo_path, batch_idx,
+                known_flow_ids=[f.flow_id for f in batch],
+            )
 
             for fid in batch_report.get("passed_flows", []):
                 prior_results[fid] = "PASS"

@@ -62,6 +62,7 @@ async def run_e2e_loop(
 
     # Fix-retest loop
     iteration = 1
+    empty_parse_count = 0  # track consecutive iterations with no parseable results
     while True:
         iteration += 1
         remaining_mins = int((deadline - time.monotonic()) / 60)
@@ -72,14 +73,39 @@ async def run_e2e_loop(
             print(f"[e2e-loop] Cost limit reached (${total_cost:.2f}) after {iteration - 1} iterations.")
             break
 
+        # Safety valve: if report has no parseable results, the fixer can't do
+        # anything useful. Stop after 2 consecutive empty-parse iterations to
+        # avoid burning money in an infinite loop.
+        if report["total"] == 0 and not report["failed_flows"]:
+            empty_parse_count += 1
+            if empty_parse_count >= 2:
+                print(
+                    f"[e2e-loop] Stopping — {empty_parse_count} consecutive iterations "
+                    f"with no parseable test results. Report parser may be broken."
+                )
+                await reporter.report("e2e_loop_complete", {
+                    "iterations": iteration - 1,
+                    "result": "parser_failure",
+                    "cost_usd": total_cost,
+                    **_report_summary(report),
+                })
+                return report
+        else:
+            empty_parse_count = 0
+
+        # If we have blocked flows but no failures, pass blocked flows to fixer too
+        fix_targets = report["failed_flows"]
+        if not fix_targets and report["blocked_flows"]:
+            fix_targets = report["blocked_flows"]
+
         print(
             f"[e2e-loop] Iteration {iteration} "
             f"(~{remaining_mins}m left, ${total_cost:.2f}/${cost_limit_usd} spent) "
-            f"— fixing {report['failed']} failures..."
+            f"— fixing {report['failed']} failures, {report['blocked']} blocked..."
         )
         await reporter.report("e2e_fix_started", {
             "iteration": iteration,
-            "failed_flows": report["failed_flows"],
+            "failed_flows": fix_targets,
             "cost_usd": total_cost,
         })
 
