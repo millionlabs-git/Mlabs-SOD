@@ -325,6 +325,7 @@ const PHASE_MAP = {
   e2e_fix_started:'fix', e2e_fix_failed:'fix',
   e2e_redeploy_started:'fix', e2e_redeploy_complete:'fix', e2e_redeploy_failed:'fix',
   agent_started:'build', agent_progress:'build', agent_completed:'build', agent_error:'build',
+  e2e_preflight_failed:'test', e2e_aborted:'test',
   e2e_batch_started:'test', e2e_batch_completed:'test', e2e_batch_failed:'test',
   e2e_flow_passed:'test', e2e_flow_failed:'test', e2e_flow_blocked:'test',
   generating_test_docs:'build',
@@ -340,7 +341,7 @@ function getEventCategory(name, detail) {
   if (name === 'agent_error') return 'error';
   if (['e2e_batch_started','e2e_batch_completed','e2e_batch_failed'].includes(name)) return 'verify';
   if (['e2e_flow_passed'].includes(name)) return 'verify';
-  if (['e2e_flow_failed','e2e_flow_blocked'].includes(name)) return 'error';
+  if (['e2e_flow_failed','e2e_flow_blocked','e2e_preflight_failed','e2e_aborted'].includes(name)) return 'error';
   if (VERIFY_EVENTS.includes(name)) return 'verify';
   if (['deployed','completed','build_complete'].includes(name)) return 'deploy';
   if (['seeding_started','seeding_complete','seeding_skipped','seeding_failed'].includes(name)) return 'phase';
@@ -380,6 +381,8 @@ function summarize(evt) {
     case 'seeding_complete': return 'Test data seeded successfully';
     case 'seeding_skipped': return 'Seeding skipped' + (d.reason ? ': ' + d.reason : '');
     case 'seeding_failed': return 'Seeding failed' + (d.error ? ': ' + d.error : '');
+    case 'e2e_preflight_failed': return 'App health check failed: ' + (d.error || '?');
+    case 'e2e_aborted': return 'E2E aborted after batch 0 — ' + (d.reason || '?');
     case 'e2e_testing_started': return 'Starting E2E tests (' + (d.mode || 'full') + ')';
     case 'e2e_testing_complete': return 'E2E: ' + (d.passed || 0) + '/' + (d.total || 0) + ' passed, ' + (d.failed || 0) + ' failed' + (d.all_passed ? ' ✓' : '');
     case 'e2e_testing_skipped': return 'E2E tests skipped' + (d.reason ? ': ' + d.reason : '');

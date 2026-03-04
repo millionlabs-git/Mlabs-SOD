@@ -47,6 +47,7 @@ async def run_e2e_loop(
         app_url=app_url,
         config=config,
         reporter=reporter,
+        fly_app_name=fly_app_name,
     )
 
     if report["all_passed"]:
@@ -85,7 +86,10 @@ async def run_e2e_loop(
         # Run fixer agent on all failures
         try:
             result = await run_agent(
-                prompt=e2e_fix_prompt(report["raw"], iteration),
+                prompt=e2e_fix_prompt(
+                    report["raw"], iteration,
+                    fly_app_name=fly_app_name, app_url=app_url,
+                ),
                 allowed_tools=["Read", "Write", "Edit", "Bash", "Grep", "Glob"],
                 cwd=repo_path,
                 model=config.model,
@@ -132,6 +136,7 @@ async def run_e2e_loop(
             config=config,
             reporter=reporter,
             retest_only=retest_flows,
+            fly_app_name=fly_app_name,
         )
 
         if report["all_passed"]:

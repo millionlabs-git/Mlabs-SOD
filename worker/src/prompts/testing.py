@@ -268,6 +268,7 @@ def e2e_batch_tester_prompt(
     batch_idx: int,
     total_batches: int,
     prior_results: dict[str, str] | None = None,
+    fly_app_name: str = "",
 ) -> str:
     """Prompt for the E2E tester agent scoped to a single batch of flows."""
     prior_results_section = ""
@@ -331,7 +332,12 @@ Resend API Key: {resend_api_key}
 4. On step failure:
    - Take a screenshot: `node {{vp_script}} screenshot {{screenshots_dir}}/{{flow_id}}-fail.png`
    - Record the error details and page state
-   - Read browser console: `node {{vp_script}} eval "JSON.stringify(window.__console_errors || [])"`
+   - Read browser console: `node {{vp_script}} eval "JSON.stringify(window.__console_errors || [])"`{f"""
+   - Capture server logs for diagnosis:
+     ```bash
+     flyctl logs --app {fly_app_name} --no-tail -n 50 2>&1 | tail -30
+     ```
+     Include any relevant server errors in the test report diagnosis.""" if fly_app_name else ""}
    - Skip remaining steps in this flow (mark as BLOCKED)
    - Continue to the next flow — NEVER stop on failure
 
@@ -378,8 +384,33 @@ Failed at step N: <action> <selector>
 """
 
 
-def e2e_fix_prompt(test_report_content: str, iteration: int) -> str:
+def e2e_fix_prompt(
+    test_report_content: str,
+    iteration: int,
+    fly_app_name: str = "",
+    app_url: str = "",
+) -> str:
     """Prompt for the fixer agent to resolve E2E test failures."""
+    server_log_section = ""
+    if fly_app_name:
+        server_log_section = f"""
+5. Diagnose server-side errors using Fly.io logs:
+   ```bash
+   flyctl logs --app {fly_app_name} --no-tail -n 100 2>&1 | tail -50
+   ```
+   Look for stack traces, unhandled exceptions, and database errors."""
+
+    verify_section = ""
+    if app_url:
+        verify_section = f"""
+6. After fixing, verify the app responds correctly before committing:
+   ```bash
+   curl -sf --max-time 10 {app_url}/health
+   curl -sf --max-time 10 -X POST -H "Content-Type: application/json" \\
+     -d '{{"email":"admin@test.mlabs.app","password":"TestPass123!"}}' \\
+     {app_url}/api/auth/login
+   ```"""
+
     return f"""\
 The E2E tests found failures. Fix ALL of the following issues (iteration {iteration}/5).
 
@@ -400,6 +431,7 @@ The E2E tests found failures. Fix ALL of the following issues (iteration {iterat
    - `npm run build` exits 0
    - `npm test` shows 0 failures
 4. Commit: `git add -A && git commit -m "fix: resolve E2E test failures (iteration {iteration})"`
+{server_log_section}{verify_section}
 
 Fix the root cause, not the symptom. Do not add workarounds or skip tests.
 """

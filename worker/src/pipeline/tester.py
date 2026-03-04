@@ -5,7 +5,9 @@ gets its own agent run with max_turns=25 (instead of 50 for all flows).
 """
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -353,6 +355,51 @@ def _extract_int(text: str, pattern: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight health check
+# ---------------------------------------------------------------------------
+
+def _preflight_check(app_url: str) -> tuple[bool, str]:
+    """Quick health check before running E2E batches.
+
+    Returns (ok, error_message). Checks:
+    1. /health endpoint responds
+    2. Auth endpoint responds (any non-timeout = healthy)
+    """
+    # Check /health
+    try:
+        result = subprocess.run(
+            ["curl", "-sf", "--max-time", "10", f"{app_url}/health"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return False, f"Health check failed: {app_url}/health returned non-200 (exit {result.returncode})"
+    except subprocess.TimeoutExpired:
+        return False, f"Health check timed out: {app_url}/health did not respond within 10s"
+
+    # Check auth endpoint (any response = healthy, only timeout = unhealthy)
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-sf", "--max-time", "10",
+                "-X", "POST",
+                "-H", "Content-Type: application/json",
+                "-d", json.dumps({"email": "admin@test.mlabs.app", "password": "TestPass123!"}),
+                "-o", "/dev/null", "-w", "%{http_code}",
+                f"{app_url}/api/auth/login",
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        # Any HTTP response (200, 401, 404) means the server is alive
+        status_code = result.stdout.strip()
+        if not status_code or status_code == "000":
+            return False, f"Auth endpoint unreachable: {app_url}/api/auth/login returned no response"
+    except subprocess.TimeoutExpired:
+        return False, f"Auth endpoint timed out: {app_url}/api/auth/login did not respond within 10s"
+
+    return True, ""
+
+
+# ---------------------------------------------------------------------------
 # Main runner (batched)
 # ---------------------------------------------------------------------------
 
@@ -362,6 +409,7 @@ async def run_e2e_tests(
     config: Config,
     reporter: StatusReporter,
     retest_only: list[str] | None = None,
+    fly_app_name: str = "",
 ) -> dict:
     """Run E2E tests against the live app in batches.
 
@@ -418,6 +466,43 @@ async def run_e2e_tests(
     total_batches = len(batches)
     print(f"[tester] Parsed {len(flows)} flows into {total_batches} batches")
 
+    # Pre-flight health check
+    preflight_ok, preflight_error = _preflight_check(app_url)
+    if not preflight_ok:
+        print(f"[tester] Pre-flight check failed: {preflight_error}")
+        await reporter.report("e2e_preflight_failed", {"error": preflight_error})
+        # Write a diagnostic report so the fixer can act
+        all_flow_ids = [f.flow_id for batch in batches for f in batch]
+        total_flow_count = len(all_flow_ids)
+        diagnostic = f"""# E2E Test Report
+
+## Summary
+total_flows: {total_flow_count}
+passed: 0
+failed: 0
+blocked: {total_flow_count}
+
+## Pre-flight Failure
+
+The app failed health checks before any tests ran:
+{preflight_error}
+
+All {total_flow_count} flows marked BLOCKED.
+
+## Failed Flow Details (for fixer agent)
+- Pre-flight health check failed: {preflight_error}
+"""
+        report_path = Path(repo_path) / "docs" / "TEST_REPORT.md"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(diagnostic)
+
+        return {
+            "total": total_flow_count, "passed": 0, "failed": 0,
+            "blocked": total_flow_count,
+            "failed_flows": [], "blocked_flows": all_flow_ids,
+            "all_passed": False, "raw": diagnostic,
+        }
+
     # Track results across batches for dependency resolution
     prior_results: dict[str, str] = {}
     total_cost = 0.0
@@ -444,6 +529,7 @@ async def run_e2e_tests(
             batch_idx=batch_idx,
             total_batches=total_batches,
             prior_results=prior_results if prior_results else None,
+            fly_app_name=fly_app_name,
         )
 
         try:
@@ -480,6 +566,58 @@ async def run_e2e_tests(
                         "flow_id": f.flow_id,
                         "reason": "not reported by batch agent",
                     })
+
+            # Cascade abort: if batch 0 has 0 passes and >50% blocked/failed, abort
+            if batch_idx == 0 and total_batches > 1:
+                b0_passed = batch_report.get("passed", 0)
+                b0_total = batch_report.get("total", 0) or len(batch)
+                b0_bad = batch_report.get("failed", 0) + batch_report.get("blocked", 0)
+                if b0_passed == 0 and b0_total > 0 and b0_bad > b0_total * 0.5:
+                    abort_reason = (
+                        f"Batch 0 critical auth flows: 0 passed, "
+                        f"{batch_report.get('failed', 0)} failed, "
+                        f"{batch_report.get('blocked', 0)} blocked"
+                    )
+                    print(f"[tester] ABORTING remaining batches — {abort_reason}")
+                    await reporter.report("e2e_aborted", {"reason": abort_reason})
+
+                    # Mark all remaining flows as BLOCKED
+                    for remaining_batch in batches[1:]:
+                        for f in remaining_batch:
+                            if f.flow_id not in prior_results:
+                                prior_results[f.flow_id] = "BLOCKED"
+                                await reporter.report("e2e_flow_blocked", {
+                                    "flow_id": f.flow_id,
+                                    "reason": f"Aborted — critical auth flows failed in batch 0",
+                                })
+
+                    # Write partial report and return early
+                    report = _aggregate_reports(repo_path, 1)  # Only batch 0 has a report file
+                    # Adjust totals to include aborted flows
+                    aborted_count = sum(len(b) for b in batches[1:])
+                    report["total"] += aborted_count
+                    report["blocked"] += aborted_count
+                    report["blocked_flows"].extend(
+                        f.flow_id for b in batches[1:] for f in b
+                        if f.flow_id not in report.get("blocked_flows", [])
+                    )
+                    report["all_passed"] = False
+                    # Re-write with abort info
+                    report["raw"] += f"\n\n## Abort\n\n{abort_reason}\n"
+                    (Path(repo_path) / "docs" / "TEST_REPORT.md").write_text(report["raw"])
+
+                    await reporter.report("e2e_testing_complete", {
+                        "total": report["total"],
+                        "passed": report["passed"],
+                        "failed": report["failed"],
+                        "blocked": report["blocked"],
+                        "all_passed": False,
+                        "cost_usd": total_cost,
+                        "batches": 1,
+                        "aborted": True,
+                        "abort_reason": abort_reason,
+                    })
+                    return report
 
             await reporter.report("e2e_batch_completed", {
                 "batch_idx": batch_idx,
