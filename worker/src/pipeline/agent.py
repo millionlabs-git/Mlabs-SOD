@@ -29,6 +29,30 @@ class AgentResult:
     is_error: bool
 
 
+def _summarize_tool(name: str, inp: dict) -> str:
+    """One-line human-readable summary of a tool use."""
+    if name == "Bash":
+        cmd = inp.get("command", "")
+        if len(cmd) > 120:
+            cmd = cmd[:120] + "..."
+        return f"$ {cmd}"
+    if name == "Read":
+        path = inp.get("file_path", "?")
+        return f"Read {path.split('/')[-1]}" if "/" in path else f"Read {path}"
+    if name in ("Write", "Edit"):
+        path = inp.get("file_path", "?")
+        return f"{name} {path.split('/')[-1]}" if "/" in path else f"{name} {path}"
+    if name == "Grep":
+        pattern = inp.get("pattern", "?")
+        return f"Grep '{pattern[:60]}'"
+    if name == "Glob":
+        return f"Glob '{inp.get('pattern', '?')}'"
+    if name == "Task":
+        desc = inp.get("description", inp.get("prompt", ""))[:80]
+        return f"Task: {desc}"
+    return name
+
+
 async def run_agent(
     prompt: str,
     *,
@@ -96,9 +120,10 @@ async def run_agent(
     start_ms = time.monotonic_ns() // 1_000_000
     result: ResultMessage | None = None
     turn_count = 0
-    tools_since_last_progress: list[str] = []
+    # Each entry: {"tool": "Bash", "detail": "npm run build"}
+    tool_details_since_last: list[dict[str, str]] = []
     last_text = ""
-    progress_interval = 5
+    progress_interval = 3
 
     try:
         async for message in query(prompt=prompt, options=options):
@@ -112,18 +137,22 @@ async def run_agent(
                         print(f"[{agent_label}] {text}")
                         last_text = text
                     elif isinstance(block, ToolUseBlock):
-                        print(f"[{agent_label}] Tool: {block.name}")
-                        tools_since_last_progress.append(block.name)
+                        detail = _summarize_tool(block.name, block.input)
+                        print(f"[{agent_label}] {detail}")
+                        tool_details_since_last.append({
+                            "tool": block.name,
+                            "detail": detail,
+                        })
 
                 # Emit progress every N turns
                 if reporter and turn_count % progress_interval == 0:
                     await reporter.report("agent_progress", {
                         "agent_label": agent_label,
                         "turn": turn_count,
-                        "tools_used": tools_since_last_progress[:],
-                        "last_text": last_text[:200] if last_text else "",
+                        "actions": tool_details_since_last[:],
+                        "summary": last_text[:400] if last_text else "",
                     })
-                    tools_since_last_progress.clear()
+                    tool_details_since_last.clear()
 
             elif isinstance(message, ResultMessage):
                 result = message

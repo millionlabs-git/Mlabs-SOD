@@ -177,6 +177,10 @@ a{color:var(--accent2)}
 .evt.log-row{opacity:0.8;border-bottom:1px solid rgba(42,42,74,0.15)}
 .evt.log-row .name{font-size:11px}
 .evt.log-row .summary{font-size:11px;color:var(--dim)}
+.evt.progress-row{background:rgba(124,58,237,0.06);border-radius:4px;padding:8px;grid-template-columns:80px auto 1fr}
+.evt.progress-row .summary{font-size:11px;line-height:1.5;white-space:pre-wrap}
+.evt.progress-row .summary b{color:var(--accent2)}
+.agent-summary{color:var(--dim);font-style:italic}
 
 /* Stats sidebar */
 .stats{background:var(--surface);border-left:1px solid var(--border);padding:16px 12px;overflow-y:auto}
@@ -204,6 +208,7 @@ a{color:var(--accent2)}
 .agent-card .agent-label{font-weight:700;color:var(--accent2)}
 .agent-card .agent-model{color:var(--dim)}
 .agent-card .agent-status{color:var(--dim);font-size:10px}
+.agent-card .agent-detail{color:var(--text);opacity:0.6;font-size:10px;margin-top:3px;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .agent-card.running{border-color:var(--accent)}
 .agent-card.done{border-color:var(--green);opacity:0.7}
 .agent-card.error{border-color:var(--red)}
@@ -387,7 +392,7 @@ function summarize(evt) {
     case 'e2e_redeploy_complete': return 'Redeploy complete (iteration ' + (d.iteration || '?') + ')';
     case 'e2e_redeploy_failed': return 'Redeploy failed (iteration ' + (d.iteration || '?') + ')';
     case 'agent_started': return (d.agent_label || 'agent') + ' started (' + (d.model || '?') + ', max ' + (d.max_turns || '?') + ' turns)';
-    case 'agent_progress': return (d.agent_label || 'agent') + ' turn ' + (d.turn || '?') + ' — tools: ' + (d.tools_used?.join(', ') || 'none');
+    case 'agent_progress': return formatAgentProgress(d);
     case 'agent_completed': return (d.agent_label || 'agent') + ' done — ' + (d.turns || '?') + ' turns, $' + (d.cost_usd?.toFixed(2) || '?') + ', ' + ((d.duration_ms/1000)?.toFixed(0) || '?') + 's';
     case 'agent_error': return (d.agent_label || 'agent') + ' error: ' + (d.error || '?');
     case 'e2e_batch_started': return 'E2E batch ' + ((d.batch_idx ?? 0) + 1) + '/' + (d.total_batches || '?') + ' started (' + (d.flow_count || '?') + ' flows)';
@@ -410,6 +415,30 @@ function summarize(evt) {
       return d.text || d.message || 'log';
     default: return d.message || name.replace(/_/g, ' ');
   }
+}
+
+function formatAgentProgress(d) {
+  const label = d.agent_label || 'agent';
+  const turn = d.turn || '?';
+  const actions = d.actions || d.tools_used || [];
+  const summary = d.summary || d.last_text || '';
+
+  // Build action lines from rich tool details
+  let actionLines = '';
+  if (actions.length && typeof actions[0] === 'object') {
+    actionLines = actions.map(a => a.detail || a.tool).join(' → ');
+  } else if (actions.length) {
+    // Backward compat: old format was just tool names
+    actionLines = actions.join(', ');
+  }
+
+  const parts = ['<b>' + label + '</b> turn ' + turn];
+  if (actionLines) parts.push(actionLines);
+  if (summary) {
+    const s = summary.length > 200 ? summary.slice(0, 200) + '...' : summary;
+    parts.push('<span class="agent-summary">' + s + '</span>');
+  }
+  return parts.join('<br>');
 }
 
 function formatTime(date) {
@@ -469,7 +498,9 @@ function addEvent(evt) {
   }
   if (evt.event === 'agent_progress') {
     const label = evt.detail?.agent_label || 'agent';
-    if (activeAgents[label]) { activeAgents[label].turns = evt.detail?.turn || 0; activeAgents[label].tools = evt.detail?.tools_used; activeAgents[label].text = evt.detail?.last_text; }
+    const actions = evt.detail?.actions || evt.detail?.tools_used || [];
+    const lastAction = actions.length ? (actions[actions.length-1]?.detail || actions[actions.length-1]) : '';
+    if (activeAgents[label]) { activeAgents[label].turns = evt.detail?.turn || 0; activeAgents[label].lastAction = lastAction; activeAgents[label].summary = evt.detail?.summary || evt.detail?.last_text || ''; }
     renderAgentCards();
   }
   if (evt.event === 'agent_completed') {
@@ -508,7 +539,8 @@ function addEvent(evt) {
   // Render event row
   const el = document.createElement('div');
   const isLog = evt.event === 'log';
-  el.className = 'evt' + (cat === 'error' ? ' error-row' : cat === 'verify' ? ' verify-row' : phase ? ' phase-row' : isLog ? ' log-row' : '');
+  const isProgress = evt.event === 'agent_progress';
+  el.className = 'evt' + (cat === 'error' ? ' error-row' : cat === 'verify' ? ' verify-row' : isProgress ? ' progress-row' : phase ? ' phase-row' : isLog ? ' log-row' : '');
   const displayName = evt.event === 'log' ? (evt.detail?.type === 'tool_use' ? 'tool' : 'agent') : evt.event;
   el.innerHTML = '<span class="ts">' + formatTime(evt.created_at) + '</span>'
     + '<span class="name ' + cat + '">' + displayName + '</span>'
@@ -527,10 +559,15 @@ function renderAgentCards() {
     const card = document.createElement('div');
     card.className = 'agent-card ' + info.status;
     let statusText = '';
-    if (info.status === 'running') statusText = 'Turn ' + (info.turns || 0) + (info.tools ? ' — ' + info.tools.slice(-3).join(', ') : '');
+    let detailText = '';
+    if (info.status === 'running') {
+      statusText = 'Turn ' + (info.turns || 0);
+      if (info.lastAction) statusText += ' — ' + (info.lastAction.length > 60 ? info.lastAction.slice(0,60) + '...' : info.lastAction);
+      if (info.summary) detailText = info.summary.length > 120 ? info.summary.slice(0,120) + '...' : info.summary;
+    }
     else if (info.status === 'done') statusText = info.turns + ' turns, $' + (info.cost?.toFixed(2) || '?') + ', ' + ((info.duration/1000)?.toFixed(0) || '?') + 's';
     else if (info.status === 'error') statusText = 'Error: ' + (info.error?.slice(0, 80) || '?');
-    card.innerHTML = '<div class="agent-header"><span class="agent-label">' + label + '</span><span class="agent-model">' + (info.model || '') + '</span></div><div class="agent-status">' + statusText + '</div>';
+    card.innerHTML = '<div class="agent-header"><span class="agent-label">' + label + '</span><span class="agent-model">' + (info.model || '') + '</span></div><div class="agent-status">' + statusText + '</div>' + (detailText ? '<div class="agent-detail">' + detailText + '</div>' : '');
     container.appendChild(card);
   }
 }
