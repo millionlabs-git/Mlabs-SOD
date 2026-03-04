@@ -655,6 +655,24 @@ All {total_flow_count} flows marked BLOCKED.
             fly_app_name=fly_app_name,
         )
 
+        # Create skeleton report file BEFORE the agent runs — agents often
+        # ignore the prompt instruction to create it and hit max_turns without
+        # writing anything.  This ensures _parse_batch_report() always has a file.
+        report_file = Path(repo_path) / "docs" / f"TEST_REPORT_BATCH_{batch_idx}.md"
+        report_file.parent.mkdir(parents=True, exist_ok=True)
+        report_file.write_text(
+            f"# E2E Test Report — Batch {batch_idx + 1} of {total_batches}\n\n"
+            f"## Summary\n"
+            f"batch: {batch_idx + 1}/{total_batches}\n"
+            f"total_flows: 0\n"
+            f"passed: 0\n"
+            f"failed: 0\n"
+            f"blocked: 0\n"
+            f"app_url: {app_url}\n\n"
+            f"## Results\n\n"
+            f"## Failed Flow Details (for fixer agent)\n"
+        )
+
         try:
             result = await run_agent(
                 prompt=prompt,
@@ -684,9 +702,15 @@ All {total_flow_count} flows marked BLOCKED.
                 prior_results[fid] = "BLOCKED"
                 await reporter.report("e2e_flow_blocked", {"flow_id": fid})
 
-            # Mark any flows not reported (agent didn't get to them) as BLOCKED
-            for f in batch:
-                if f.flow_id not in prior_results:
+            # Backfill: any flows not in the report get appended as BLOCKED
+            # so _aggregate_reports can pick them up from the file.
+            unreported = [f for f in batch if f.flow_id not in prior_results]
+            if unreported:
+                with open(report_file, "a") as rf:
+                    for f in unreported:
+                        rf.write(f"\n### BLOCKED: {f.flow_id}\n")
+                        rf.write(f"  reason: not reported by batch agent (hit max_turns)\n")
+                for f in unreported:
                     prior_results[f.flow_id] = "BLOCKED"
                     await reporter.report("e2e_flow_blocked", {
                         "flow_id": f.flow_id,
