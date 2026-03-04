@@ -365,36 +365,45 @@ def _preflight_check(app_url: str) -> tuple[bool, str]:
     1. /health endpoint responds
     2. Auth endpoint responds (any non-timeout = healthy)
     """
-    # Check /health
+    # Check /health (30s timeout to allow Fly.io cold starts)
     try:
         result = subprocess.run(
-            ["curl", "-sf", "--max-time", "10", f"{app_url}/health"],
-            capture_output=True, text=True, timeout=15,
+            [
+                "curl", "-s", "--max-time", "30",
+                "-o", "/dev/null", "-w", "%{http_code}",
+                f"{app_url}/health",
+            ],
+            capture_output=True, text=True, timeout=35,
         )
-        if result.returncode != 0:
-            return False, f"Health check failed: {app_url}/health returned non-200 (exit {result.returncode})"
+        status_code = result.stdout.strip()
+        if not status_code or status_code == "000":
+            return False, f"Health check failed: {app_url}/health — no response (app may be down)"
+        # 200-499 means app is alive (even 404 means server responds)
+        code = int(status_code)
+        if code >= 500:
+            return False, f"Health check failed: {app_url}/health returned {status_code}"
     except subprocess.TimeoutExpired:
-        return False, f"Health check timed out: {app_url}/health did not respond within 10s"
+        return False, f"Health check timed out: {app_url}/health did not respond within 30s"
 
     # Check auth endpoint (any response = healthy, only timeout = unhealthy)
     try:
         result = subprocess.run(
             [
-                "curl", "-sf", "--max-time", "10",
+                "curl", "-s", "--max-time", "30",
                 "-X", "POST",
                 "-H", "Content-Type: application/json",
                 "-d", json.dumps({"email": "admin@test.mlabs.app", "password": "TestPass123!"}),
                 "-o", "/dev/null", "-w", "%{http_code}",
                 f"{app_url}/api/auth/login",
             ],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=35,
         )
         # Any HTTP response (200, 401, 404) means the server is alive
         status_code = result.stdout.strip()
         if not status_code or status_code == "000":
             return False, f"Auth endpoint unreachable: {app_url}/api/auth/login returned no response"
     except subprocess.TimeoutExpired:
-        return False, f"Auth endpoint timed out: {app_url}/api/auth/login did not respond within 10s"
+        return False, f"Auth endpoint timed out: {app_url}/api/auth/login did not respond within 30s"
 
     return True, ""
 
