@@ -644,15 +644,18 @@ async def run_pipeline(
                 import os
                 import subprocess
 
-                # Set RESEND_API_KEY as fly secret for the app
+                # Set RESEND_API_KEY as fly secret for the app (non-fatal)
                 if config.resend_api_key:
                     os.environ.setdefault("FLY_API_TOKEN", config.fly_api_token)
-                    subprocess.run(
-                        ["flyctl", "secrets", "set",
-                         f"RESEND_API_KEY={config.resend_api_key}",
-                         "-a", fly_app_name],
-                        capture_output=True, text=True, timeout=30,
-                    )
+                    try:
+                        subprocess.run(
+                            ["flyctl", "secrets", "set",
+                             f"RESEND_API_KEY={config.resend_api_key}",
+                             "-a", fly_app_name],
+                            capture_output=True, text=True, timeout=120,
+                        )
+                    except Exception as e:
+                        print(f"[runner] Warning: failed to set RESEND_API_KEY secret: {e}")
 
                 test_report = await run_e2e_loop(
                     repo_path=repo_path,
