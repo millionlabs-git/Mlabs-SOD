@@ -31,9 +31,26 @@ class FlowSpec:
 
 
 def parse_user_flows(content: str) -> list[FlowSpec]:
-    """Split USER_FLOWS.md on ``## Flow:`` headers into FlowSpec objects."""
+    """Parse USER_FLOWS.md into FlowSpec objects.
+
+    Supports two formats:
+      1. Structured: ``## Flow: <flow-id>`` with priority/user_type/depends_on fields
+      2. Prose: ``### N.M <Flow Name>`` (numbered subsections under ``## N. Category``)
+
+    The prose format is auto-detected when no ``## Flow:`` headers are found.
+    """
+    # Try structured format first
+    flows = _parse_structured_flows(content)
+    if flows:
+        return flows
+
+    # Fall back to prose/numbered format
+    return _parse_prose_flows(content)
+
+
+def _parse_structured_flows(content: str) -> list[FlowSpec]:
+    """Parse ``## Flow: <id>`` format."""
     flows: list[FlowSpec] = []
-    # Split on ## Flow: headers, keeping the header with each chunk
     chunks = re.split(r"(?=^## Flow:\s*)", content, flags=re.MULTILINE)
 
     for chunk in chunks:
@@ -69,6 +86,91 @@ def parse_user_flows(content: str) -> list[FlowSpec]:
         ))
 
     return flows
+
+
+def _parse_prose_flows(content: str) -> list[FlowSpec]:
+    """Parse numbered prose format (``### N.M Name`` under ``## N. Category``).
+
+    Derives flow_id from the name by slugifying it, and infers priority
+    from the category (auth flows → critical, admin → medium, etc.).
+    """
+    flows: list[FlowSpec] = []
+
+    # First pass: build a map of line_number → category from ## headers
+    lines = content.split("\n")
+    cat_at_line: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = re.match(r"^## \d+\.\s*(.+)", line)
+        if m:
+            cat_at_line.append((i, m.group(1).strip().lower()))
+
+    def _category_for_line(line_no: int) -> str:
+        cat = ""
+        for cl, cn in cat_at_line:
+            if cl <= line_no:
+                cat = cn
+        return cat
+
+    # Second pass: split on ### headers
+    chunks = re.split(r"(?=^### )", content, flags=re.MULTILINE)
+    offset = 0
+
+    for chunk in chunks:
+        header = re.match(r"^###\s+(?:\d+\.\d+\s+)?(.+?)$", chunk, re.MULTILINE)
+        if not header:
+            offset += chunk.count("\n")
+            continue
+
+        name = header.group(1).strip()
+        # Skip TOC entries (very short chunks)
+        if len(chunk.strip().split("\n")) < 3:
+            offset += chunk.count("\n")
+            continue
+
+        flow_id = _slugify(name)
+        current_category = _category_for_line(offset)
+
+        # Infer priority from category and name
+        name_lower = name.lower()
+        priority = "medium"
+        if any(kw in current_category for kw in ["auth"]):
+            priority = "critical"
+        elif any(kw in name_lower for kw in ["login", "signup", "register", "logout"]):
+            priority = "critical"
+        elif any(kw in current_category for kw in ["admin", "moderat"]):
+            priority = "medium"
+        elif any(kw in current_category for kw in ["waitlist", "theme"]):
+            priority = "low"
+
+        # Infer user_type from category
+        user_type = ""
+        if "admin" in current_category:
+            user_type = "admin"
+        elif "account" in current_category:
+            user_type = "user"
+        elif "auth" in current_category:
+            user_type = "user"
+
+        flows.append(FlowSpec(
+            flow_id=flow_id,
+            priority=priority,
+            user_type=user_type,
+            depends_on=[],
+            raw_text=chunk.strip(),
+        ))
+
+        offset += chunk.count("\n")
+
+    return flows
+
+
+def _slugify(name: str) -> str:
+    """Convert a flow name to a slug ID: 'Add a Building (happy path)' → 'add-a-building-happy-path'."""
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9\s-]", "", slug)  # remove special chars
+    slug = re.sub(r"[\s]+", "-", slug.strip())  # spaces to hyphens
+    slug = re.sub(r"-+", "-", slug)  # collapse multiple hyphens
+    return slug[:60]  # cap length
 
 
 # ---------------------------------------------------------------------------
