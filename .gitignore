@@ -4,3 +4,4 @@ dist/
 *.js.map
 __pycache__/
 *.pyc
+.worktrees/
