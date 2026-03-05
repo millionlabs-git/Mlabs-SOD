@@ -29,6 +29,15 @@ class BuildPlan:
         return sum(1 for t in self.tasks if t.has_ui)
 
 
+@dataclass
+class EmailTemplate:
+    alias: str          # e.g., "welcome", "password-reset"
+    name: str           # Human-readable name
+    subject: str        # Subject line with {{variables}}
+    html_body: str      # HTML template
+    text_body: str      # Plain text fallback
+
+
 def parse_build_plan(plan_path: str) -> BuildPlan:
     """Parse BUILD_PLAN.md into a structured BuildPlan.
 

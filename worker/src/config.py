@@ -31,6 +31,12 @@ class Config(BaseModel):
     fly_api_token: str = ""
     resend_api_key: str = ""
 
+    # Email testing (Postmark + Private Email IMAP)
+    postmark_account_api_key: str = ""
+    private_email_host: str = "mail.privateemail.com"
+    private_email_user: str = ""
+    private_email_password: str = ""
+
     # Model
     model: str = "claude-sonnet-4-6"
 
@@ -67,6 +73,10 @@ class Config(BaseModel):
             neon_api_key=os.environ.get("NEON_API_KEY", ""),
             fly_api_token=os.environ.get("FLY_API_TOKEN", ""),
             resend_api_key=os.environ.get("RESEND_API_KEY", ""),
+            postmark_account_api_key=os.environ.get("POSTMARK_ACCOUNT_API_KEY", ""),
+            private_email_host=os.environ.get("PRIVATE_EMAIL_HOST", "mail.privateemail.com"),
+            private_email_user=os.environ.get("PRIVATE_EMAIL_USER", ""),
+            private_email_password=os.environ.get("PRIVATE_EMAIL_PASSWORD", ""),
             model=os.environ.get("MODEL", "claude-sonnet-4-6"),
             max_task_retries=int(os.environ.get("MAX_TASK_RETRIES", "3")),
             task_timeout=int(os.environ.get("TASK_TIMEOUT", "300")),
