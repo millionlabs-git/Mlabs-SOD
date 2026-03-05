@@ -124,6 +124,11 @@ async def main() -> None:
         if deploy_result:
             print(f"[main] Deploy result: {deploy_result}")
 
+        # Signal completion to the orchestrator so it marks the job as 'completed'
+        await reporter.report("build_complete", {
+            "live_url": deploy_result.get("live_url") if deploy_result else None,
+            "fly_app_name": deploy_result.get("fly_app_name") if deploy_result else None,
+        })
         print("[main] Build completed successfully")
 
     except Exception as e:
