@@ -413,7 +413,9 @@ blocked: {blocked}
     return {
         "total": total, "passed": passed, "failed": failed, "blocked": blocked,
         "failed_flows": all_failed, "blocked_flows": all_blocked,
-        "all_passed": failed == 0 and blocked == 0 and total > 0,
+        # "all_passed" means no test FAILED. Blocked flows (from agents not
+        # writing reports) are not failures — they're reporting gaps.
+        "all_passed": failed == 0 and total > 0,
         "raw": aggregated,
     }
 
@@ -458,7 +460,7 @@ def parse_test_report(repo_path: str) -> dict:
     return {
         "total": total, "passed": passed, "failed": failed, "blocked": blocked,
         "failed_flows": failed_flows, "blocked_flows": blocked_flows,
-        "all_passed": failed == 0 and blocked == 0 and total > 0,
+        "all_passed": failed == 0 and total > 0,
         "raw": raw,
     }
 

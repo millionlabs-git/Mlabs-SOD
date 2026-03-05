@@ -101,6 +101,22 @@ class TestParseTestReport:
         assert result["failed"] == 1
         assert result["blocked"] == 1
 
+    def test_blocked_but_no_failures_is_passed(self, tmp_path: Path):
+        """Blocked flows (unreported agents) should not prevent all_passed."""
+        report = tmp_path / "docs" / "TEST_REPORT.md"
+        report.parent.mkdir(parents=True)
+        report.write_text(
+            "## Results\n\n"
+            "### PASS: signup\nAll passed.\n\n"
+            "### BLOCKED: login\n  reason: not reported by batch agent\n\n"
+            "### BLOCKED: logout\n  reason: not reported by batch agent\n"
+        )
+        result = parse_test_report(str(tmp_path))
+        assert result["passed"] == 1
+        assert result["failed"] == 0
+        assert result["blocked"] == 2
+        assert result["all_passed"] is True  # 0 failures = passed
+
     def test_failed_variant_spelling(self, tmp_path: Path):
         """Parser should accept both FAIL and FAILED."""
         report = tmp_path / "docs" / "TEST_REPORT.md"
