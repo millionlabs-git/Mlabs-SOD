@@ -1,7 +1,7 @@
 """Post-deploy E2E tester — runs USER_FLOWS.md against the live app with Visual Playwright.
 
 Splits flows into batches of 6 to avoid context overflow. Each batch
-gets its own agent run with max_turns=25 (instead of 50 for all flows).
+gets its own agent run with max_turns=30.
 """
 from __future__ import annotations
 
@@ -188,7 +188,7 @@ _SMOKE_COUNT = 3
 
 def batch_flows(
     flows: list[FlowSpec],
-    batch_size: int = 6,
+    batch_size: int = 3,
     retest_only: list[str] | None = None,
 ) -> list[list[FlowSpec]]:
     """Topological-sort flows by dependencies and chunk into batches.
@@ -538,8 +538,9 @@ async def run_e2e_tests(
 ) -> dict:
     """Run E2E tests against the live app in batches.
 
-    Splits USER_FLOWS.md into batches of 6 flows. Each batch gets its own
-    agent run with max_turns=25 to stay well under the 1MB context buffer.
+    Splits USER_FLOWS.md into batches of 3 flows. Each batch gets its own
+    agent run with max_turns=30 to give agents enough turns per flow to
+    both run browser tests AND write results to the report file.
 
     Args:
         repo_path: Path to the cloned repo.
@@ -587,7 +588,7 @@ async def run_e2e_tests(
             "all_passed": True, "raw": "",
         }
 
-    batches = batch_flows(flows, batch_size=6, retest_only=retest_only)
+    batches = batch_flows(flows, batch_size=3, retest_only=retest_only)
     total_batches = len(batches)
     print(f"[tester] Parsed {len(flows)} flows into {total_batches} batches")
 
@@ -682,7 +683,7 @@ All {total_flow_count} flows marked BLOCKED.
                 allowed_tools=["Bash", "Read", "Write", "Grep", "Glob"],
                 cwd=repo_path,
                 model="claude-sonnet-4-6",
-                max_turns=25,
+                max_turns=30,
                 reporter=reporter,
                 agent_label=f"e2e-batch-{batch_idx}",
             )

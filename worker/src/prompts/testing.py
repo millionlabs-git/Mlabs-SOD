@@ -305,40 +305,23 @@ Resend API Key: {resend_api_key}
 
 {seed_data_content}
 
-## CRITICAL: Write the Report File FIRST
+## MANDATORY: Report Writing
 
-Before running any tests, create the report file with a skeleton:
+The report file already exists at `docs/TEST_REPORT_BATCH_{batch_idx}.md`.
+You MUST append a result line to it after EACH flow — this is non-negotiable.
+If you run out of turns, only results written to the file count.
 
-```bash
-cat > docs/TEST_REPORT_BATCH_{batch_idx}.md << 'REPORT_EOF'
-# E2E Test Report — Batch {batch_idx + 1} of {total_batches}
+## Per-Flow Procedure (repeat for each flow)
 
-## Summary
-batch: {batch_idx + 1}/{total_batches}
-total_flows: 0
-passed: 0
-failed: 0
-blocked: 0
-app_url: {app_url}
+For EACH flow, do these steps in order:
 
-## Results
+**Step A — Check dependencies.** If a dependency failed (this batch or prior), skip to Step D with BLOCKED.
 
-## Failed Flow Details (for fixer agent)
-REPORT_EOF
-```
-
-After EACH flow completes (pass, fail, or blocked), IMMEDIATELY append the result to this
-file using `>>` and update the summary counts. Do NOT wait until the end — you may run out
-of turns. The results MUST be in the file even if you don't finish all flows.
-
-## Execution Rules
-
-1. Run flows in dependency order (check `depends_on` for each flow)
-2. For each flow, execute every step sequentially using Visual Playwright:
+**Step B — Execute the flow** using Visual Playwright:
    - `goto`: `node {{vp_script}} goto "{{app_url}}{{url}}" --screenshot {{screenshots_dir}}/{{name}}.png`
    - `fill`: `node {{vp_script}} fill "{{selector}}" "{{value}}"`
    - `click`: `node {{vp_script}} click "{{selector}}"`
-   - `wait`: Check for the expected condition by taking a screenshot and evaluating
+   - `wait`: Take a screenshot and check the expected condition
    - `screenshot`: `node {{vp_script}} screenshot {{screenshots_dir}}/{{name}}.png`
    - `select`: `node {{vp_script}} select "{{selector}}" "{{value}}"`
    - `check_email`: Use curl to call Resend API:
@@ -347,57 +330,43 @@ of turns. The results MUST be in the file even if you don't finish all flows.
        -H "Authorization: Bearer {{resend_api_key}}" \\
        -H "Content-Type: application/json"
      ```
-     Poll every 2 seconds up to timeout. Find email matching `to` and `subject_contains`.
-     Extract the URL from the email HTML body for the `extract` variable.
-   - `assert`: Verify by taking a screenshot and checking the page content
+   - `assert`: Take a screenshot and verify the page content
+   - Selector resolution: try each comma-separated selector left-to-right.
+     Use `node {{vp_script}} attrs "{{selector}}"` to check existence.
 
-3. Selector resolution: each step has comma-separated selectors. Try each left-to-right.
-   Use `node {{vp_script}} attrs "{{selector}}"` to check if an element exists.
-   If none match, FAIL the step and list what IS visible on the page.
+**Step C — On failure:**
+   - Take screenshot: `node {{vp_script}} screenshot {{screenshots_dir}}/{{flow_id}}-fail.png`{f"""
+   - Capture server logs: `flyctl logs --app {fly_app_name} --no-tail -n 50 2>&1 | tail -30`""" if fly_app_name else ""}
+   - Skip remaining steps in this flow
 
-4. On step failure:
-   - Take a screenshot: `node {{vp_script}} screenshot {{screenshots_dir}}/{{flow_id}}-fail.png`
-   - Record the error details and page state
-   - Read browser console: `node {{vp_script}} eval "JSON.stringify(window.__console_errors || [])"`{f"""
-   - Capture server logs for diagnosis:
-     ```bash
-     flyctl logs --app {fly_app_name} --no-tail -n 50 2>&1 | tail -30
-     ```
-     Include any relevant server errors in the test report diagnosis.""" if fly_app_name else ""}
-   - Skip remaining steps in this flow (mark as BLOCKED)
-   - Continue to the next flow — NEVER stop on failure
+**Step D — IMMEDIATELY write the result** (do this BEFORE starting the next flow):
+   ```bash
+   cat >> docs/TEST_REPORT_BATCH_{batch_idx}.md << 'EOF'
 
-5. If a flow's dependency failed (in this batch or a prior batch), mark it BLOCKED without attempting it.
-   Note if seeded data could make it independent.
-
-6. Writing results: After EACH flow, append to docs/TEST_REPORT_BATCH_{batch_idx}.md using this format:
-
-   For a passing flow, append:
-   ```
    ### PASS: <flow-id>
    All N steps passed.
+   EOF
    ```
+   Or for failures:
+   ```bash
+   cat >> docs/TEST_REPORT_BATCH_{batch_idx}.md << 'EOF'
 
-   For a failing flow, append:
-   ```
    ### FAIL: <flow-id>
    Failed at step N: <action> <selector>
      error: <what went wrong>
-     page_state: <what's visible>
-     screenshot: <path>
      diagnosis: <likely root cause>
+   EOF
    ```
+   Or for blocked:
+   ```bash
+   cat >> docs/TEST_REPORT_BATCH_{batch_idx}.md << 'EOF'
 
-   For a blocked flow, append:
-   ```
    ### BLOCKED: <flow-id>
      reason: <which dependency failed>
+   EOF
    ```
 
-   Then update the Summary section counts (total_flows, passed, failed, blocked) to reflect
-   the current running totals.
-
-7. Close VP sessions when done: `node {{vp_script}} close`
+Then move to the next flow. Close VP when done: `node {{vp_script}} close`
 """
 
 
