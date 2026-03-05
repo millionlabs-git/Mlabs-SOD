@@ -294,3 +294,49 @@ class TestCheckTestHasAssertions:
         )
         checker = StructuralChecker(tmp_path)
         assert checker.check_test_has_assertions(tf) == []
+
+
+# ---------------------------------------------------------------------------
+# PhaseVerifier.verify_email_setup
+# ---------------------------------------------------------------------------
+
+class TestVerifyEmailSetup:
+    def test_no_email_templates_passes(self, tmp_path: Path):
+        _write(tmp_path / "docs" / "ARCHITECTURE.md", "# Architecture\n## Data Models\n")
+        from src.orchestrator.verifier import PhaseVerifier
+        v = PhaseVerifier(tmp_path)
+        result = v.verify_email_setup()
+        assert result.passed is True
+
+    def test_templates_with_matching_files_passes(self, tmp_path: Path):
+        _write(
+            tmp_path / "docs" / "ARCHITECTURE.md",
+            "# Architecture\n\n## Email Templates\n"
+            "- alias: welcome | subject: Hi | trigger: signup | variables: name\n\n"
+            "## Other\n",
+        )
+        _write(tmp_path / "emails" / "welcome.html", "<h1>Hi {{name}}</h1>")
+        _write(tmp_path / "emails" / "welcome.txt", "Hi {{name}}")
+        from src.orchestrator.verifier import PhaseVerifier
+        v = PhaseVerifier(tmp_path)
+        result = v.verify_email_setup()
+        assert result.passed is True
+
+    def test_templates_missing_files_fails(self, tmp_path: Path):
+        _write(
+            tmp_path / "docs" / "ARCHITECTURE.md",
+            "# Architecture\n\n## Email Templates\n"
+            "- alias: welcome | subject: Hi | trigger: signup | variables: name\n\n"
+            "## Other\n",
+        )
+        from src.orchestrator.verifier import PhaseVerifier
+        v = PhaseVerifier(tmp_path)
+        result = v.verify_email_setup()
+        assert result.passed is False
+        assert any("welcome" in issue for issue in result.issues)
+
+    def test_no_architecture_file_passes(self, tmp_path: Path):
+        from src.orchestrator.verifier import PhaseVerifier
+        v = PhaseVerifier(tmp_path)
+        result = v.verify_email_setup()
+        assert result.passed is True

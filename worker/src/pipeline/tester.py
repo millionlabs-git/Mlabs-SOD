@@ -629,6 +629,18 @@ All {total_flow_count} flows marked BLOCKED.
             "all_passed": False, "raw": diagnostic,
         }
 
+    # Clear email inbox for this job if email testing is configured
+    if config.private_email_user and config.private_email_password:
+        from src.pipeline.email import InboxReader
+        email_reader = InboxReader(
+            host=config.private_email_host,
+            port=993,
+            user=config.private_email_user,
+            password=config.private_email_password,
+        )
+        email_reader.clear_inbox(f"{config.job_id[:8]}")
+        print(f"[tester] Email inbox cleared for job {config.job_id[:8]}")
+
     # Track results across batches for dependency resolution
     prior_results: dict[str, str] = {}
     total_cost = 0.0
@@ -656,6 +668,7 @@ All {total_flow_count} flows marked BLOCKED.
             total_batches=total_batches,
             prior_results=prior_results if prior_results else None,
             fly_app_name=fly_app_name,
+            job_id=config.job_id[:8],
         )
 
         # Create skeleton report file BEFORE the agent runs — agents often

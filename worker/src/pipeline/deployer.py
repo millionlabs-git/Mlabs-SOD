@@ -343,6 +343,47 @@ async def deploy(
         except Exception as e:
             print(f"[deployer] Deployment verification error (non-fatal): {e}")
 
+    # --- Step 5b: Push email templates to Postmark (if configured) ---
+    if config.postmark_account_api_key and fly_app_name:
+        arch_path = Path(repo_path) / "docs" / "ARCHITECTURE.md"
+        if arch_path.exists():
+            from src.pipeline.email import (
+                PostmarkManager,
+                parse_architecture_templates,
+                load_template_files,
+            )
+            template_specs = parse_architecture_templates(arch_path.read_text())
+            if template_specs:
+                print(f"[deployer] Found {len(template_specs)} email templates — pushing to Postmark")
+                await reporter.report("email_setup_started", {
+                    "template_count": len(template_specs),
+                })
+
+                pm = PostmarkManager(config.postmark_account_api_key)
+                server_token = await pm.ensure_server(config.job_id[:8])
+
+                templates = load_template_files(repo_path, template_specs)
+                if templates:
+                    await pm.push_templates(server_token, templates)
+
+                    # Set Postmark server token as Fly secret
+                    subprocess.run(
+                        [
+                            "flyctl", "secrets", "set",
+                            f"POSTMARK_SERVER_TOKEN={server_token}",
+                            "-a", fly_app_name,
+                        ],
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    print(f"[deployer] Set POSTMARK_SERVER_TOKEN on {fly_app_name}")
+
+                await reporter.report("email_setup_complete", {
+                    "templates_pushed": len(templates),
+                    "server_name": f"sod-{config.job_id[:8]}",
+                })
+            else:
+                print("[deployer] No email templates in ARCHITECTURE.md — skipping Postmark setup")
+
     # --- Step 6: Commit deployment artifacts and report ---
     git_commit(repo_path, "docs: add deployment info and verification")
     if branch_name:

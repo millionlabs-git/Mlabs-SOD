@@ -406,6 +406,37 @@ class PhaseVerifier:
 
         return VerifyResult(passed=len(issues) == 0, issues=issues)
 
+    # -- phase: email_setup -------------------------------------------------
+
+    def verify_email_setup(self) -> VerifyResult:
+        """Check email template files match ARCHITECTURE.md specs."""
+        from src.pipeline.email import parse_architecture_templates
+
+        arch_path = self.root / "docs" / "ARCHITECTURE.md"
+        if not arch_path.is_file():
+            return VerifyResult(passed=True)  # No architecture = nothing to check
+
+        content = arch_path.read_text(errors="replace")
+        template_specs = parse_architecture_templates(content)
+
+        if not template_specs:
+            return VerifyResult(passed=True)  # No email templates = skip
+
+        issues: list[str] = []
+        emails_dir = self.root / "emails"
+
+        for spec in template_specs:
+            alias = spec["alias"]
+            html_file = emails_dir / f"{alias}.html"
+            txt_file = emails_dir / f"{alias}.txt"
+
+            if not html_file.exists():
+                issues.append(f"Missing email template: emails/{alias}.html")
+            if not txt_file.exists():
+                issues.append(f"Missing email template: emails/{alias}.txt")
+
+        return VerifyResult(passed=len(issues) == 0, issues=issues)
+
 
 # ---------------------------------------------------------------------------
 # CLI entrypoint
@@ -420,7 +451,7 @@ def main() -> None:
     )
     parser.add_argument(
         "phase",
-        choices=["architecture", "scaffold", "task", "review"],
+        choices=["architecture", "scaffold", "task", "review", "email_setup"],
         help="Phase to verify",
     )
     parser.add_argument(
@@ -451,6 +482,8 @@ def main() -> None:
         result = verifier.verify_task(args.task_name, args.test_files)
     elif args.phase == "review":
         result = verifier.verify_review()
+    elif args.phase == "email_setup":
+        result = verifier.verify_email_setup()
     else:
         result = VerifyResult(passed=False, issues=[f"Unknown phase: {args.phase}"])
 
