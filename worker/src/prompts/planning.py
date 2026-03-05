@@ -19,6 +19,21 @@ Write the architecture doc to docs/ARCHITECTURE.md in the repo.
 
 PRD:
 {prd_content}
+
+## Email Templates
+
+When designing the system, identify all email touchpoints. If the PRD requires any email functionality
+(registration verification, password reset, notifications, invitations, etc.), document each email in
+ARCHITECTURE.md under a section called "## Email Templates" using this exact format:
+
+- alias: <template-alias> | subject: <subject line with {{{{variables}}}}> | trigger: <what causes this email> | variables: <comma-separated list of template variables>
+
+Examples:
+- alias: welcome | subject: Welcome to {{{{app_name}}}} | trigger: after signup | variables: app_name, name, verify_link
+- alias: password-reset | subject: Reset your password | trigger: forgot password flow | variables: name, reset_link
+- alias: invite | subject: You've been invited to {{{{app_name}}}} | trigger: team invite | variables: inviter_name, app_name, invite_link
+
+If the PRD has no email requirements, omit this section entirely.
 """
 
 

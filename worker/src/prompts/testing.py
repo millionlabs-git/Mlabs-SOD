@@ -44,7 +44,7 @@ postconditions:
 - **wait**: Wait for a condition. Params: `for` (visible|navigation|any), `timeout`, `conditions` (for `any`)
 - **select**: Select from dropdown. Params: `selector`, `value`, optional `fallback: skip`
 - **screenshot**: Capture state. Params: `name`
-- **check_email**: Read sent email via Resend API. Params: `to`, `subject_contains`, `timeout`, `extract` (variable name for extracted URL)
+- **check_email**: Verify email delivery via IMAP. Params: `to`, `subject_contains`, `timeout`, `extract` (variable name for extracted URL). The orchestrator reads the email via IMAP and extracts links automatically.
 - **assert**: Verify state. Params: `type` (visible|no_error|email_received), `selector`, `text_contains`
 
 ### Selector Strategy
@@ -60,8 +60,8 @@ Use comma-separated CSS selectors for resilience. Try data-testid first, then se
 - Include password reset (with check_email to follow reset link)
 - Include email verification for registration (with check_email)
 - Include cross-cutting: unauthenticated redirect, invalid credentials, session handling
-- Use test email addresses on the pattern: <role>@test.mlabs.app
-- Use `newuser@test.mlabs.app` for registration flow (NOT pre-seeded)
+- Use test email addresses on the pattern: <role>@millionlabs.digital
+- Use `newuser@millionlabs.digital` for registration flow (NOT pre-seeded)
 - All seeded accounts use password: TestPass123!
 - Every flow that submits a form must verify the result (check it appears in a list, check success message, etc.)
 - Flows that send transactional emails (password reset, verification, invites) must use check_email to read the email and follow the action link
@@ -105,8 +105,8 @@ All accounts are pre-verified (email_verified: true).
 
 - One verified account per user type defined in USER_FLOWS.md
 - All accounts use password `TestPass123!` and are email-verified
-- Use email pattern: <role>@test.mlabs.app
-- Include `newuser@test.mlabs.app` as NOT pre-seeded (for registration testing)
+- Use email pattern: <role>@millionlabs.digital
+- Include `newuser@millionlabs.digital` as NOT pre-seeded (for registration testing)
 - Include enough relational data for flows to execute:
   - If a tenant flow views a lease, seed a lease
   - If a landlord flow views requests, seed a request
@@ -195,14 +195,9 @@ Resend API Key: {resend_api_key}
    - `wait`: Check for the expected condition by taking a screenshot and evaluating
    - `screenshot`: `node {{vp_script}} screenshot {{screenshots_dir}}/{{name}}.png`
    - `select`: `node {{vp_script}} select "{{selector}}" "{{value}}"`
-   - `check_email`: Use curl to call Resend API:
-     ```bash
-     curl -s https://api.resend.com/emails \\
-       -H "Authorization: Bearer {{resend_api_key}}" \\
-       -H "Content-Type: application/json"
-     ```
-     Poll every 2 seconds up to timeout. Find email matching `to` and `subject_contains`.
-     Extract the URL from the email HTML body for the `extract` variable.
+   - `check_email`: Email verification is handled by the orchestrator via IMAP.
+     Write the flow step result as PENDING_EMAIL with the expected recipient and subject.
+     The orchestrator will poll the inbox and provide the verification link.
    - `assert`: Verify by taking a screenshot and checking the page content
 
 3. Selector resolution: each step has comma-separated selectors. Try each left-to-right.
@@ -269,6 +264,7 @@ def e2e_batch_tester_prompt(
     total_batches: int,
     prior_results: dict[str, str] | None = None,
     fly_app_name: str = "",
+    job_id: str = "",
 ) -> str:
     """Prompt for the E2E tester agent scoped to a single batch of flows."""
     prior_results_section = ""
@@ -324,12 +320,10 @@ For EACH flow, do these steps in order:
    - `wait`: Take a screenshot and check the expected condition
    - `screenshot`: `node {{vp_script}} screenshot {{screenshots_dir}}/{{name}}.png`
    - `select`: `node {{vp_script}} select "{{selector}}" "{{value}}"`
-   - `check_email`: Use curl to call Resend API:
-     ```bash
-     curl -s https://api.resend.com/emails \\
-       -H "Authorization: Bearer {{resend_api_key}}" \\
-       -H "Content-Type: application/json"
-     ```
+   - `check_email`: Email verification is handled by the orchestrator via IMAP.
+     Write the flow step result as PENDING_EMAIL with the expected recipient and subject.
+     The orchestrator will poll the inbox and provide the verification link.
+     For this project, test emails use: {job_id}-<role>@millionlabs.digital
    - `assert`: Take a screenshot and verify the page content
    - Selector resolution: try each comma-separated selector left-to-right.
      Use `node {{vp_script}} attrs "{{selector}}"` to check existence.
