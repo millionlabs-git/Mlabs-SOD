@@ -1,6 +1,6 @@
 """Post-deploy E2E tester — runs USER_FLOWS.md against the live app with Visual Playwright.
 
-Splits flows into batches of 6 to avoid context overflow. Each batch
+Splits flows into batches of 3 to avoid context overflow. Each batch
 gets its own agent run with max_turns=30.
 """
 from __future__ import annotations

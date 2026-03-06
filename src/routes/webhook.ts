@@ -33,10 +33,17 @@ webhookRouter.post('/webhook', async (req: Request, res: Response) => {
 
   const data = parsed.data;
 
+  const monitorUrl = `${config.orchestratorUrl}/dashboard`;
+
   // Dedup: if a pending/running job exists for same repo+branch, return it
   const existing = await findExistingJob(data.repo_url, data.branch);
   if (existing) {
-    res.status(200).json({ job_id: existing.id, status: existing.status, deduplicated: true });
+    res.status(200).json({
+      job_id: existing.id,
+      status: existing.status,
+      monitor_url: `${monitorUrl}/${existing.id}`,
+      deduplicated: true,
+    });
     return;
   }
 
@@ -56,5 +63,5 @@ webhookRouter.post('/webhook', async (req: Request, res: Response) => {
     message: 'Build queued',
   }).catch(() => {});
 
-  res.status(201).json({ job_id: job.id, status: 'pending' });
+  res.status(201).json({ job_id: job.id, status: 'pending', monitor_url: `${monitorUrl}/${job.id}` });
 });
